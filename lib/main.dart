@@ -7,6 +7,7 @@ import 'components/ingredient_display.dart';
 import 'widgets/segmented_control_section.dart';
 import 'components/steps_display.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 void main() {
   runApp(const PizzaCalculatorApp());
@@ -125,6 +126,7 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
       1; // 0 = fresh (2%), 1 = instant/active dry (0.5%), 2 = poolish
   double _poolishAmount = 300.0; // Amount of poolish to use
   bool _isOvernightRise = false; // false = same day, true = overnight (24h)
+  bool _isScreenAwake = false; // Controls whether the screen stays awake
 
   // Dynamic yeast percentage based on type and rise time (not used for poolish)
   double get _yeastPercent {
@@ -142,12 +144,6 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
 
     // Halve yeast for overnight rise (24h fermentation)
     return _isOvernightRise ? basePercent / 2 : basePercent;
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _loadSavedSettings();
   }
 
   // Load saved settings from SharedPreferences
@@ -323,7 +319,7 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
         ),
         backgroundColor: const Color(0xFF1C1C1C),
         border: null,
-        trailing: _hasCustomSettings
+        leading: _hasCustomSettings
             ? GestureDetector(
                 onTap: () {
                   showCupertinoDialog(
@@ -357,6 +353,50 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
                 ),
               )
             : null,
+        trailing: GestureDetector(
+          onTap: () async {
+            final prefs = await SharedPreferences.getInstance();
+            final hasSeenWakelockExplanation =
+                prefs.getBool('hasSeenWakelockExplanation') ?? false;
+
+            if (!hasSeenWakelockExplanation) {
+              await showCupertinoDialog(
+                context: context,
+                builder: (context) => CupertinoAlertDialog(
+                  title: const Text('Keep Screen On'),
+                  content: const Text(
+                    'This feature keeps your screen on while you make pizza. Useful when your hands are covered in flour! 🍕\n\nYou can toggle this any time using the sun icon.',
+                  ),
+                  actions: [
+                    CupertinoDialogAction(
+                      onPressed: () {
+                        Navigator.pop(context);
+                      },
+                      child: const Text('Got it!'),
+                    ),
+                  ],
+                ),
+              );
+              await prefs.setBool('hasSeenWakelockExplanation', true);
+            }
+
+            setState(() {
+              _isScreenAwake = !_isScreenAwake;
+            });
+            await WakelockPlus.toggle(enable: _isScreenAwake);
+            await prefs.setBool('isScreenAwake', _isScreenAwake);
+            HapticFeedback.selectionClick();
+          },
+          child: Icon(
+            _isScreenAwake
+                ? CupertinoIcons.sun_dust_fill
+                : CupertinoIcons.sun_dust,
+            color: _isScreenAwake
+                ? CupertinoColors.systemBlue
+                : CupertinoColors.systemGrey,
+            size: 24,
+          ),
+        ),
       ),
       child: Stack(
         children: [
@@ -522,34 +562,40 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
           children: {
             0: const Padding(
               padding: EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-              child: Text(
-                'Fresh',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: CupertinoColors.white,
+              child: Center(
+                child: Text(
+                  'Fresh',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: CupertinoColors.white,
+                  ),
                 ),
               ),
             ),
             1: const Padding(
               padding: EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-              child: Text(
-                'Instant / Active dry',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: CupertinoColors.white,
+              child: Center(
+                child: Text(
+                  'Instant/Dry',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: CupertinoColors.white,
+                  ),
                 ),
               ),
             ),
             2: const Padding(
               padding: EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-              child: Text(
-                'Poolish',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: CupertinoColors.white,
+              child: Center(
+                child: Text(
+                  'Poolish',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: CupertinoColors.white,
+                  ),
                 ),
               ),
             ),

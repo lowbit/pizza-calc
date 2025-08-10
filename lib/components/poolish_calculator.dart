@@ -62,6 +62,11 @@ class _DraggablePoolishModalState extends State<_DraggablePoolishModal> {
     poolishAmount = widget.initialAmount;
   }
 
+  // Check if current settings differ from defaults
+  bool get _hasCustomSettings {
+    return poolishAmount != 300.0;
+  }
+
   @override
   Widget build(BuildContext context) {
     // Calculate poolish components
@@ -102,14 +107,59 @@ class _DraggablePoolishModalState extends State<_DraggablePoolishModal> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Drag handle
-                  Container(
-                    margin: const EdgeInsets.only(top: 12, bottom: 8),
-                    width: 36,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF3A3A3C),
-                      borderRadius: BorderRadius.circular(2),
+                  // Drag handle and reset button row
+                  Padding(
+                    padding: const EdgeInsets.only(
+                      top: 12,
+                      left: 8, // Added some left padding to balance the right
+                      right: 8,
+                      bottom: 0,
+                    ),
+                    // Use a SizedBox to constrain the height of the Stack
+                    child: SizedBox(
+                      height: 28,
+                      child: Stack(
+                        children: [
+                          // 1. The refresh button, shown conditionally on the far left
+                          if (_hasCustomSettings)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 8.0),
+                              child: Align(
+                                alignment: Alignment.centerLeft,
+                                child: CupertinoButton(
+                                  padding: EdgeInsets
+                                      .zero, // Use zero padding for precise alignment
+                                  minSize:
+                                      0, // Use zero minSize for precise alignment
+                                  onPressed: () {
+                                    setState(() {
+                                      poolishAmount = 300.0;
+                                    });
+                                    HapticFeedback.mediumImpact();
+                                  },
+                                  child: const Icon(
+                                    CupertinoIcons.refresh,
+                                    color: CupertinoColors.systemBlue,
+                                    size:
+                                        22, // Adjusted size slightly for aesthetics
+                                  ),
+                                ),
+                              ),
+                            ),
+                          // 2. The handle, always perfectly centered within the Stack
+                          Align(
+                            alignment: Alignment.center,
+                            child: Container(
+                              width: 36,
+                              height: 4,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF3A3A3C),
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
 
