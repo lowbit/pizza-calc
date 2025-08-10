@@ -111,11 +111,10 @@ class _DraggablePoolishModalState extends State<_DraggablePoolishModal> {
                   Padding(
                     padding: const EdgeInsets.only(
                       top: 12,
-                      left: 8, // Added some left padding to balance the right
+                      left: 8,
                       right: 8,
                       bottom: 0,
                     ),
-                    // Use a SizedBox to constrain the height of the Stack
                     child: SizedBox(
                       height: 28,
                       child: Stack(
@@ -128,9 +127,8 @@ class _DraggablePoolishModalState extends State<_DraggablePoolishModal> {
                                 alignment: Alignment.centerLeft,
                                 child: CupertinoButton(
                                   padding: EdgeInsets
-                                      .zero, // Use zero padding for precise alignment
-                                  minSize:
-                                      0, // Use zero minSize for precise alignment
+                                      .zero,
+                                  minimumSize: Size.zero,
                                   onPressed: () {
                                     setState(() {
                                       poolishAmount = 300.0;
@@ -140,8 +138,7 @@ class _DraggablePoolishModalState extends State<_DraggablePoolishModal> {
                                   child: const Icon(
                                     CupertinoIcons.refresh,
                                     color: CupertinoColors.systemBlue,
-                                    size:
-                                        22, // Adjusted size slightly for aesthetics
+                                    size: 22,
                                   ),
                                 ),
                               ),
@@ -162,8 +159,6 @@ class _DraggablePoolishModalState extends State<_DraggablePoolishModal> {
                       ),
                     ),
                   ),
-
-                  // Title
                   const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     child: Text(
@@ -175,8 +170,6 @@ class _DraggablePoolishModalState extends State<_DraggablePoolishModal> {
                       ),
                     ),
                   ),
-
-                  // Content area
                   Padding(
                     padding: const EdgeInsets.all(16),
                     child: Column(
@@ -215,10 +208,7 @@ class _DraggablePoolishModalState extends State<_DraggablePoolishModal> {
                             ],
                           ),
                         ),
-
                         const SizedBox(height: 24),
-
-                        // Poolish amount input
                         PickerInput(
                           title: 'Poolish Amount',
                           value: '${poolishAmount.round()}g',
@@ -299,8 +289,6 @@ class _DraggablePoolishModalState extends State<_DraggablePoolishModal> {
                             ],
                           ),
                         ),
-
-                        // Bottom padding for safe area
                         SizedBox(
                           height: MediaQuery.of(context).padding.bottom + 16,
                         ),

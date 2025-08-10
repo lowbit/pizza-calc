@@ -204,7 +204,6 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
     await prefs.remove('${typeKey}_poolishAmount');
     await prefs.remove('${typeKey}_isOvernightRise');
 
-    // Reset to defaults
     setState(() {
       _hydrationPercent = _pizzaType.config.defaultHydration;
       _doughballs = _pizzaType.config.defaultDoughballs;
@@ -355,37 +354,55 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
             : null,
         trailing: GestureDetector(
           onTap: () async {
-            final prefs = await SharedPreferences.getInstance();
-            final hasSeenWakelockExplanation =
-                prefs.getBool('hasSeenWakelockExplanation') ?? false;
+            try {
+              // First async gap: getting preferences.
+              final prefs = await SharedPreferences.getInstance();
 
-            if (!hasSeenWakelockExplanation) {
-              await showCupertinoDialog(
-                context: context,
-                builder: (context) => CupertinoAlertDialog(
-                  title: const Text('Keep Screen On'),
-                  content: const Text(
-                    'This feature keeps your screen on while you make pizza. Useful when your hands are covered in flour! 🍕\n\nYou can toggle this any time using the sun icon.',
-                  ),
-                  actions: [
-                    CupertinoDialogAction(
-                      onPressed: () {
-                        Navigator.pop(context);
-                      },
-                      child: const Text('Got it!'),
+              // FIX: Check if the widget is still mounted *before* using its context.
+              // Using context.mounted is the modern, recommended approach.
+              if (!context.mounted) return;
+
+              final hasSeenWakelockExplanation =
+                  prefs.getBool('hasSeenWakelockExplanation') ?? false;
+
+              if (!hasSeenWakelockExplanation) {
+                // The context is safe to use here because we just checked it.
+                await showCupertinoDialog(
+                  context: context,
+                  builder: (context) => CupertinoAlertDialog(
+                    title: const Text('Keep Screen On'),
+                    content: const Text(
+                      'This feature keeps your screen on while you make pizza. Useful when your hands are covered in flour! 🍕\n\nYou can toggle this any time using the sun icon.',
                     ),
-                  ],
-                ),
-              );
-              await prefs.setBool('hasSeenWakelockExplanation', true);
-            }
+                    actions: [
+                      CupertinoDialogAction(
+                        onPressed: () {
+                          Navigator.pop(context);
+                        },
+                        child: const Text('Got it!'),
+                      ),
+                    ],
+                  ),
+                );
 
-            setState(() {
-              _isScreenAwake = !_isScreenAwake;
-            });
-            await WakelockPlus.toggle(enable: _isScreenAwake);
-            await prefs.setBool('isScreenAwake', _isScreenAwake);
-            HapticFeedback.selectionClick();
+                // FIX: Check AGAIN after the dialog closes (another async gap).
+                if (!context.mounted) return;
+                await prefs.setBool('hasSeenWakelockExplanation', true);
+              }
+
+              // It's now safe to update the state.
+              setState(() {
+                _isScreenAwake = !_isScreenAwake;
+              });
+
+              // These last operations don't rely on the context, so they're fine.
+              await WakelockPlus.toggle(enable: _isScreenAwake);
+              await prefs.setBool('isScreenAwake', _isScreenAwake);
+              HapticFeedback.selectionClick();
+            } catch (e) {
+              // It's good practice to catch potential errors.
+              debugPrint("Error handling wakelock toggle: $e");
+            }
           },
           child: Icon(
             _isScreenAwake
@@ -512,7 +529,7 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
                   Icon(
                     CupertinoIcons.sun_max,
                     color: !_isOvernightRise
-                        ? const Color(0xFFFF6B35) // Orange when selected
+                        ? const Color(0xFFFF6B35)
                         : CupertinoColors.white,
                     size: 16,
                   ),
@@ -536,7 +553,7 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
                   Icon(
                     CupertinoIcons.moon,
                     color: _isOvernightRise
-                        ? const Color(0xFF4A90E2) // Blue when selected
+                        ? const Color(0xFF4A90E2)
                         : CupertinoColors.white,
                     size: 16,
                   ),
@@ -765,11 +782,8 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
     showCupertinoDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => WillPopScope(
-        onWillPop: () async {
-          // Don't allow back button to dismiss
-          return false;
-        },
+      builder: (context) => PopScope(
+        canPop: false,
         child: CupertinoAlertDialog(
           content: const Text(
             '🍕🍍 Hawaiian pizza da best',
