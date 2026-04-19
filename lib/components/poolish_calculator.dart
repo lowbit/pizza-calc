@@ -75,7 +75,10 @@ class _DraggablePoolishModalState extends State<_DraggablePoolishModal> {
     final double poolishYeastAmount = poolishFlour * (poolishYeast / 100);
 
     return GestureDetector(
-      onTap: () => Navigator.of(context).pop(poolishAmount),
+      onTap: () {
+        HapticFeedback.selectionClick();
+        Navigator.of(context).pop(poolishAmount);
+      },
       child: Container(
         color: CupertinoColors.black.withValues(alpha: 0.4),
         alignment: Alignment.bottomCenter,
@@ -337,11 +340,15 @@ class ValuePicker<T> {
                   children: [
                     CupertinoButton(
                       child: const Text('Cancel'),
-                      onPressed: () => Navigator.of(context).pop(),
+                      onPressed: () {
+                        HapticFeedback.selectionClick();
+                        Navigator.of(context).pop();
+                      },
                     ),
                     CupertinoButton(
                       child: const Text('Done'),
                       onPressed: () {
+                        HapticFeedback.selectionClick();
                         onChanged(items[selectedIndex]);
                         Navigator.of(context).pop();
                       },

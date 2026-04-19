@@ -1,4 +1,5 @@
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/services.dart';
 import 'package:pizza_calc/widgets/stepper_button.dart';
 
 /// Reusable picker input widget for discrete values
@@ -51,7 +52,10 @@ class PickerInput extends StatelessWidget {
                 ),
                 Expanded(
                   child: GestureDetector(
-                    onTap: onTap,
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      onTap();
+                    },
                     child: Container(
                       height: 48,
                       margin: const EdgeInsets.symmetric(horizontal: 12),

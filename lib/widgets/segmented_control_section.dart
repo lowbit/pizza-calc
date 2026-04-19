@@ -1,4 +1,5 @@
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/services.dart';
 
 /// Reusable segmented control section component
 class SegmentedControlSection<T extends Object> extends StatelessWidget {
@@ -48,7 +49,10 @@ class SegmentedControlSection<T extends Object> extends StatelessWidget {
                 vertical: 2,
               ),
               children: children,
-              onValueChanged: onValueChanged,
+              onValueChanged: (T? value) {
+                HapticFeedback.selectionClick();
+                onValueChanged(value);
+              },
               groupValue: groupValue,
               selectedColor: const Color(0x44FFFFFF),
               unselectedColor: const Color(0x00000000),

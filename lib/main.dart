@@ -1,3 +1,5 @@
+import 'dart:math' show sqrt;
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
 import 'package:pizza_calc/components/poolish_calculator.dart';
@@ -48,6 +50,8 @@ class PizzaTypeConfig {
   final double saltPercent;
   final double sugarPercent;
   final double oilPercent;
+  final int defaultFermentationMode; // 0 = same day, 1 = cold ferment
+  final int defaultColdFermentDays;
 
   const PizzaTypeConfig({
     required this.displayName,
@@ -58,6 +62,8 @@ class PizzaTypeConfig {
     required this.saltPercent,
     required this.sugarPercent,
     required this.oilPercent,
+    this.defaultFermentationMode = 0,
+    this.defaultColdFermentDays = 2,
   });
 }
 
@@ -76,9 +82,11 @@ enum PizzaType {
           defaultHydration: 60.0,
           defaultDoughballs: 4,
           defaultGramsPerBall: 250.0,
-          saltPercent: 2.0,
+          saltPercent: 2.5,
           sugarPercent: 0.0,
           oilPercent: 0.0,
+          defaultFermentationMode: 0, // Same day
+          defaultColdFermentDays: 2,
         );
       case PizzaType.newYork:
         return const PizzaTypeConfig(
@@ -86,10 +94,12 @@ enum PizzaType {
           flourType: 'Bread Flour',
           defaultHydration: 64.0,
           defaultDoughballs: 4,
-          defaultGramsPerBall: 280.0,
-          saltPercent: 2.0,
+          defaultGramsPerBall: 300.0,
+          saltPercent: 2.5,
           sugarPercent: 1.0,
           oilPercent: 2.0,
+          defaultFermentationMode: 1, // Cold ferment
+          defaultColdFermentDays: 2,
         );
       case PizzaType.sicilian:
         return const PizzaTypeConfig(
@@ -98,20 +108,24 @@ enum PizzaType {
           defaultHydration: 74.0,
           defaultDoughballs: 1,
           defaultGramsPerBall: 800.0,
-          saltPercent: 2.0,
+          saltPercent: 2.5,
           sugarPercent: 0.0,
           oilPercent: 3.0,
+          defaultFermentationMode: 1, // Cold ferment
+          defaultColdFermentDays: 2,
         );
       case PizzaType.roman:
         return const PizzaTypeConfig(
           displayName: 'Roman',
           flourType: '00',
-          defaultHydration: 70.0,
+          defaultHydration: 80.0,
           defaultDoughballs: 1,
           defaultGramsPerBall: 800.0,
-          saltPercent: 2.0,
+          saltPercent: 2.5,
           sugarPercent: 0.0,
           oilPercent: 4.0,
+          defaultFermentationMode: 1, // Cold ferment
+          defaultColdFermentDays: 2,
         );
     }
   }
@@ -125,25 +139,91 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
   int _yeastType =
       1; // 0 = fresh (2%), 1 = instant/active dry (0.5%), 2 = poolish
   double _poolishAmount = 300.0; // Amount of poolish to use
-  bool _isOvernightRise = false; // false = same day, true = overnight (24h)
   bool _isScreenAwake = false; // Controls whether the screen stays awake
+  int _fermentationMode = 0; // 0 = same day (room temp), 1 = cold ferment (fridge)
+  int _targetBakeHour = 19; // Default bake time: 7:00 PM
+  int _targetBakeMinute = 0;
+  int _coldFermentDays = 2; // Default: 2 days cold ferment
+  DateTime _planStartTime = DateTime.now(); // Snapshot of when the plan was created
 
-  // Dynamic yeast percentage based on type and rise time (not used for poolish)
-  double get _yeastPercent {
-    double basePercent;
-    switch (_yeastType) {
-      case 0:
-        basePercent = 2.0; // Fresh
-        break;
-      case 1:
-        basePercent = 0.5; // Instant/Active Dry
-        break;
-      default:
-        return 0.0; // Poolish (no additional yeast, not affected by rise time)
+  // Compute effective fermentation hours for yeast calculation
+  double get _effectiveFermentationHours {
+    if (_fermentationMode == 0) {
+      final now = DateTime.now();
+      final target = DateTime(
+        now.year, now.month, now.day,
+        _targetBakeHour, _targetBakeMinute,
+      );
+      final diffMinutes = target.difference(now).inMinutes;
+      if (diffMinutes < 120) return 2.0; // Minimum 2 hours
+      return diffMinutes / 60.0;
+    } else {
+      return (_coldFermentDays * 24).toDouble();
     }
+  }
 
-    // Halve yeast for overnight rise (24h fermentation)
-    return _isOvernightRise ? basePercent / 2 : basePercent;
+  // Format time for display (e.g., "19:00")
+  String _formatTimeOfDay(int hour, int minute) {
+    return '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
+  }
+
+  // Format duration for display (e.g., "5h 30m")
+  String _formatDuration(double hours) {
+    final h = hours.floor();
+    final m = ((hours - h) * 60).round();
+    if (h == 0) return '${m}m';
+    if (m == 0) return '${h}h';
+    return '${h}h ${m}m';
+  }
+
+  // Get minutes from now to target bake time (for same day mode)
+  int get _minutesToBakeTime {
+    final now = DateTime.now();
+    final target = DateTime(
+      now.year, now.month, now.day,
+      _targetBakeHour, _targetBakeMinute,
+    );
+    return target.difference(now).inMinutes;
+  }
+
+  // Dynamic yeast percentage based on type, pizza type, and fermentation time
+  double get _yeastPercent {
+    if (_yeastType == 2) return 0.0; // Poolish has its own yeast
+
+    // Base yeast percentages at reference fermentation time
+    // Fresh yeast (type 0) is ~3x instant (type 1) by weight
+    // Same day (room temp): reference is 8h
+    // Cold ferment (fridge): reference is 24h
+    Map<int, Map<int, double>> baseYeastForReference = {
+      0: {0: 0.9, 1: 0.3},  // Same day (room temp, 8h reference)
+      1: {0: 0.6, 1: 0.2},  // Cold ferment (fridge, 24h reference)
+    };
+
+    Map<int, int> referenceTime = {
+      0: 8,   // Same day reference
+      1: 24,  // Cold ferment reference
+    };
+
+    double basePercent = baseYeastForReference[_fermentationMode]?[_yeastType] ?? 0.3;
+    int refTime = referenceTime[_fermentationMode] ?? 8;
+
+    // Calculate yeast using inverse square root relationship
+    // Standard baker's formula: yeast adjusts inversely with square root of time
+    double timeRatio = refTime / _effectiveFermentationHours;
+    double calculatedPercent = basePercent * sqrt(timeRatio.clamp(0.1, 16.0));
+
+    // Ensure reasonable bounds for yeast percentage
+    Map<int, List<double>> bounds = {
+      0: [0.2, 2.5],  // Fresh yeast bounds
+      1: [0.05, 1.0], // Instant yeast bounds
+    };
+
+    calculatedPercent = calculatedPercent.clamp(
+      bounds[_yeastType]![0],
+      bounds[_yeastType]![1],
+    );
+
+    return calculatedPercent;
   }
 
   // Load saved settings from SharedPreferences
@@ -151,7 +231,6 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
     final prefs = await SharedPreferences.getInstance();
 
     setState(() {
-      // Load settings for current pizza type
       final typeKey = _pizzaType.name;
       _hydrationPercent =
           prefs.getDouble('${typeKey}_hydration') ??
@@ -164,7 +243,15 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
           _pizzaType.config.defaultGramsPerBall;
       _yeastType = prefs.getInt('${typeKey}_yeastType') ?? 1;
       _poolishAmount = prefs.getDouble('${typeKey}_poolishAmount') ?? 300.0;
-      _isOvernightRise = prefs.getBool('${typeKey}_isOvernightRise') ?? false;
+      _fermentationMode =
+          prefs.getInt('${typeKey}_fermentationMode') ??
+          _pizzaType.config.defaultFermentationMode;
+      _targetBakeHour = prefs.getInt('${typeKey}_targetBakeHour') ?? 19;
+      _targetBakeMinute = prefs.getInt('${typeKey}_targetBakeMinute') ?? 0;
+      _coldFermentDays =
+          prefs.getInt('${typeKey}_coldFermentDays') ??
+          _pizzaType.config.defaultColdFermentDays;
+      _planStartTime = DateTime.now();
     });
   }
 
@@ -178,7 +265,10 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
     await prefs.setDouble('${typeKey}_gramsPerBall', _gramsPerBall);
     await prefs.setInt('${typeKey}_yeastType', _yeastType);
     await prefs.setDouble('${typeKey}_poolishAmount', _poolishAmount);
-    await prefs.setBool('${typeKey}_isOvernightRise', _isOvernightRise);
+    await prefs.setInt('${typeKey}_fermentationMode', _fermentationMode);
+    await prefs.setInt('${typeKey}_targetBakeHour', _targetBakeHour);
+    await prefs.setInt('${typeKey}_targetBakeMinute', _targetBakeMinute);
+    await prefs.setInt('${typeKey}_coldFermentDays', _coldFermentDays);
   }
 
   // Check if current settings differ from defaults
@@ -188,7 +278,10 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
         _gramsPerBall != _pizzaType.config.defaultGramsPerBall ||
         _yeastType != 1 ||
         _poolishAmount != 300.0 ||
-        _isOvernightRise != false;
+        _fermentationMode != _pizzaType.config.defaultFermentationMode ||
+        _targetBakeHour != 19 ||
+        _targetBakeMinute != 0 ||
+        _coldFermentDays != _pizzaType.config.defaultColdFermentDays;
   }
 
   // Reset to default settings for current pizza type
@@ -196,13 +289,15 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
     final prefs = await SharedPreferences.getInstance();
     final typeKey = _pizzaType.name;
 
-    // Remove saved settings for current type
     await prefs.remove('${typeKey}_hydration');
     await prefs.remove('${typeKey}_doughballs');
     await prefs.remove('${typeKey}_gramsPerBall');
     await prefs.remove('${typeKey}_yeastType');
     await prefs.remove('${typeKey}_poolishAmount');
-    await prefs.remove('${typeKey}_isOvernightRise');
+    await prefs.remove('${typeKey}_fermentationMode');
+    await prefs.remove('${typeKey}_targetBakeHour');
+    await prefs.remove('${typeKey}_targetBakeMinute');
+    await prefs.remove('${typeKey}_coldFermentDays');
 
     setState(() {
       _hydrationPercent = _pizzaType.config.defaultHydration;
@@ -210,7 +305,10 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
       _gramsPerBall = _pizzaType.config.defaultGramsPerBall;
       _yeastType = 1;
       _poolishAmount = 300.0;
-      _isOvernightRise = false;
+      _fermentationMode = _pizzaType.config.defaultFermentationMode;
+      _targetBakeHour = 19;
+      _targetBakeMinute = 0;
+      _coldFermentDays = _pizzaType.config.defaultColdFermentDays;
     });
   }
 
@@ -296,7 +394,10 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
       backgroundColor: const Color(0xFF000000),
       navigationBar: CupertinoNavigationBar(
         middle: GestureDetector(
-          onTap: _showPizzaTypeSelector,
+          onTap: () {
+            HapticFeedback.selectionClick();
+            _showPizzaTypeSelector();
+          },
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -321,6 +422,7 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
         leading: _hasCustomSettings
             ? GestureDetector(
                 onTap: () {
+                  HapticFeedback.selectionClick();
                   showCupertinoDialog(
                     context: context,
                     builder: (context) => CupertinoAlertDialog(
@@ -332,13 +434,17 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
                         CupertinoDialogAction(
                           isDestructiveAction: true,
                           onPressed: () {
+                            HapticFeedback.mediumImpact();
                             Navigator.pop(context);
                             _resetToDefaults();
                           },
                           child: const Text('Reset'),
                         ),
                         CupertinoDialogAction(
-                          onPressed: () => Navigator.pop(context),
+                          onPressed: () {
+                            HapticFeedback.selectionClick();
+                            Navigator.pop(context);
+                          },
                           child: const Text('Cancel'),
                         ),
                       ],
@@ -377,6 +483,7 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
                     actions: [
                       CupertinoDialogAction(
                         onPressed: () {
+                          HapticFeedback.selectionClick();
                           Navigator.pop(context);
                         },
                         child: const Text('Got it!'),
@@ -433,10 +540,23 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
                       ingredients: ingredients,
                       flourType: _pizzaType.config.flourType,
                     ),
-                    const SizedBox(height: 24),
+                     const SizedBox(height: 24),
                     StepsDisplay(
                       pizzaType: _pizzaType.config.displayName,
-                      isOvernightRise: _isOvernightRise,
+                      isColdFerment: _fermentationMode == 1,
+                      coldFermentDays: _coldFermentDays,
+                      targetBakeTime: _fermentationMode == 0
+                          ? DateTime(
+                              DateTime.now().year,
+                              DateTime.now().month,
+                              DateTime.now().day,
+                              _targetBakeHour,
+                              _targetBakeMinute,
+                            )
+                          : null,
+                      planStartTime: _fermentationMode == 0
+                          ? _planStartTime
+                          : null,
                     ),
                     const SizedBox(height: 20),
                     // Developer credit
@@ -444,9 +564,12 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
                       child: Column(
                         children: [
                           GestureDetector(
-                            onTap: _showHawaiianPizzaToast,
+                            onTap: () {
+                              HapticFeedback.lightImpact();
+                              _showHawaiianPizzaToast();
+                            },
                             child: Text(
-                              'Made with ❤️ by Rijad Spahic',
+                              'Made by Rijad Spahic',
                               style: TextStyle(
                                 color: CupertinoColors.systemGrey,
                                 fontSize: 12,
@@ -516,25 +639,15 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
           markers: const ['55%', '65%', '75%', '80%'],
         ),
         const SizedBox(height: 16),
-        SegmentedControlSection<bool>(
-          title: 'Rise Time',
-          groupValue: _isOvernightRise,
-          onValueChanged: _updateRiseTime,
-          children: {
-            false: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    CupertinoIcons.sun_max,
-                    color: !_isOvernightRise
-                        ? const Color(0xFFFF6B35)
-                        : CupertinoColors.white,
-                    size: 16,
-                  ),
-                  const SizedBox(width: 8),
-                  const Text(
+        SegmentedControlSection<int>(
+            title: 'Fermentation',
+            groupValue: _fermentationMode,
+            onValueChanged: _updateFermentationMode,
+            children: {
+              0: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                child: Center(
+                  child: Text(
                     'Same Day',
                     style: TextStyle(
                       fontSize: 14,
@@ -542,35 +655,142 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
                       color: CupertinoColors.white,
                     ),
                   ),
-                ],
+                ),
               ),
-            ),
-            true: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    CupertinoIcons.moon,
-                    color: _isOvernightRise
-                        ? const Color(0xFF4A90E2)
-                        : CupertinoColors.white,
-                    size: 16,
-                  ),
-                  const SizedBox(width: 8),
-                  const Text(
-                    'Overnight',
+              1: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                child: Center(
+                  child: Text(
+                    'Cold Ferment',
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w500,
                       color: CupertinoColors.white,
                     ),
                   ),
-                ],
+                ),
+              ),
+            },
+          ),
+          const SizedBox(height: 12),
+          if (_fermentationMode == 0) ...[
+            // Same Day: bake time picker with duration display
+            GestureDetector(
+              onTap: () {
+                HapticFeedback.selectionClick();
+                _showBakeTimePicker();
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1C1C1C),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF2C2C2E), width: 0.5),
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'Bake at',
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w500,
+                            color: CupertinoColors.white,
+                          ),
+                        ),
+                        Row(
+                          children: [
+                            Text(
+                              _formatTimeOfDay(_targetBakeHour, _targetBakeMinute),
+                              style: const TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w600,
+                                color: CupertinoColors.systemBlue,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            const Icon(
+                              CupertinoIcons.chevron_right,
+                              color: Color(0xFF8E8E93),
+                              size: 16,
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Icon(
+                          _minutesToBakeTime < 120
+                              ? CupertinoIcons.exclamationmark_triangle_fill
+                              : CupertinoIcons.clock,
+                          size: 14,
+                          color: _minutesToBakeTime < 120
+                              ? CupertinoColors.systemYellow
+                              : const Color(0xFF8E8E93),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          _minutesToBakeTime < 0
+                              ? 'Time has passed — pick a later time'
+                              : _minutesToBakeTime < 120
+                                  ? 'Only ~${_formatDuration(_minutesToBakeTime / 60.0)} — dough needs more time'
+                                  : '~${_formatDuration(_effectiveFermentationHours)} fermentation at room temp',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: _minutesToBakeTime < 120
+                                ? CupertinoColors.systemYellow
+                                : const Color(0xFF8E8E93),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
-          },
-        ),
+          ] else ...[
+            // Cold Ferment: days picker
+            PickerInput(
+              title: 'Days in fridge',
+              value: '$_coldFermentDays ${_coldFermentDays == 1 ? 'day' : 'days'}',
+              onTap: _showColdFermentDaysPicker,
+              onDecrease: _coldFermentDays > 1
+                  ? () => _updateColdFermentDays(_coldFermentDays - 1)
+                  : null,
+              onIncrease: _coldFermentDays < 5
+                  ? () => _updateColdFermentDays(_coldFermentDays + 1)
+                  : null,
+            ),
+            if (_coldFermentDays >= 4) ...[
+              const SizedBox(height: 8),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Row(
+                  children: [
+                    const Icon(
+                      CupertinoIcons.info_circle,
+                      size: 14,
+                      color: Color(0xFF8E8E93),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      _coldFermentDays == 4
+                          ? 'Extended — flavor peaks, watch for over-proofing'
+                          : 'Maximum — dough may lose structure',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: Color(0xFF8E8E93),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
         const SizedBox(height: 16),
         SegmentedControlSection<int>(
           title: 'Yeast Type',
@@ -621,7 +841,10 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
         if (_yeastType == 2) ...[
           const SizedBox(height: 12),
           GestureDetector(
-            onTap: _showPoolishCalculator,
+            onTap: () {
+              HapticFeedback.selectionClick();
+              _showPoolishCalculator();
+            },
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
@@ -701,14 +924,95 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
     HapticFeedback.selectionClick();
   }
 
-  void _updateRiseTime(bool? isOvernight) {
-    if (isOvernight != null) {
+  void _updateFermentationMode(int? mode) {
+    if (mode != null) {
       setState(() {
-        _isOvernightRise = isOvernight;
+        _fermentationMode = mode;
+        _planStartTime = DateTime.now();
       });
       _saveSettings();
     }
     HapticFeedback.selectionClick();
+  }
+
+  void _updateColdFermentDays(int days) {
+    setState(() {
+      _coldFermentDays = days;
+    });
+    _saveSettings();
+    HapticFeedback.lightImpact();
+  }
+
+  void _showBakeTimePicker() {
+    showCupertinoModalPopup<void>(
+      context: context,
+      builder: (BuildContext context) => Container(
+        height: 300,
+        color: const Color(0xFF1C1C1C),
+        child: Column(
+          children: [
+            Container(
+              height: 50,
+              decoration: const BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(color: Color(0xFF3A3A3C), width: 0.5),
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  CupertinoButton(
+                    child: const Text('Cancel'),
+                    onPressed: () {
+                      HapticFeedback.selectionClick();
+                      Navigator.of(context).pop();
+                    },
+                  ),
+                  CupertinoButton(
+                    child: const Text('Done'),
+                    onPressed: () {
+                      HapticFeedback.selectionClick();
+                      Navigator.of(context).pop();
+                    },
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: CupertinoDatePicker(
+                mode: CupertinoDatePickerMode.time,
+                initialDateTime: DateTime(
+                  2024, 1, 1,
+                  _targetBakeHour, _targetBakeMinute,
+                ),
+                minuteInterval: 15,
+                use24hFormat: true,
+                backgroundColor: const Color(0xFF1C1C1C),
+                onDateTimeChanged: (DateTime value) {
+                  setState(() {
+                    _targetBakeHour = value.hour;
+                    _targetBakeMinute = value.minute;
+                    _planStartTime = DateTime.now();
+                  });
+                  _saveSettings();
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showColdFermentDaysPicker() {
+    final days = List.generate(5, (index) => index + 1);
+    ValuePicker.show<int>(
+      context: context,
+      items: days,
+      initialValue: _coldFermentDays,
+      onChanged: _updateColdFermentDays,
+      displayBuilder: (value) => '$value ${value == 1 ? 'day' : 'days'}',
+    );
   }
 
   void _updatePizzaType(PizzaType pizzaType) {
@@ -731,6 +1035,7 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
         actions: PizzaType.values.map((pizzaType) {
           return CupertinoActionSheetAction(
             onPressed: () {
+              HapticFeedback.selectionClick();
               Navigator.pop(context);
               _updatePizzaType(pizzaType);
             },
@@ -757,6 +1062,7 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
         cancelButton: CupertinoActionSheetAction(
           isDefaultAction: true,
           onPressed: () {
+            HapticFeedback.selectionClick();
             Navigator.pop(context);
           },
           child: const Text('Cancel'),
@@ -792,6 +1098,7 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
           actions: [
             CupertinoDialogAction(
               onPressed: () {
+                HapticFeedback.selectionClick();
                 Navigator.pop(context);
               },
               child: const Text('I agree!'),

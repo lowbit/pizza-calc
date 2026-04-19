@@ -1,4 +1,5 @@
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/services.dart';
 
 /// Enhanced slider with visual markers and tap-to-pick functionality
 class EnhancedSlider extends StatelessWidget {
@@ -65,7 +66,10 @@ class EnhancedSlider extends StatelessWidget {
             child: Column(
               children: [
                 GestureDetector(
-                  onTap: onTap,
+                  onTap: () {
+                    HapticFeedback.selectionClick();
+                    onTap();
+                  },
                   child: SizedBox(
                     width: double.infinity,
                     child: CupertinoSlider(
@@ -79,28 +83,30 @@ class EnhancedSlider extends StatelessWidget {
                     ),
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4.0),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: markers.map((marker) {
-                      final markerValue = double.parse(
-                        marker.replaceAll('%', ''),
-                      );
-                      final isActive = (value - markerValue).abs() <= 2;
-                      return Text(
-                        marker,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          color: isActive
-                              ? CupertinoColors.systemBlue
-                              : const Color(0xFF8E8E93),
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ),
+                 Padding(
+                   padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                   child: Row(
+                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                     children: markers.map((marker) {
+                       String cleanMarker = marker
+                           .replaceAll('%', '')
+                           .replaceAll('x', '')
+                           .trim();
+                       final markerValue = double.parse(cleanMarker);
+                       final isActive = (value - markerValue).abs() <= (value >= 10 ? 5 : 0.5);
+                       return Text(
+                         marker,
+                         style: TextStyle(
+                           fontSize: 12,
+                           fontWeight: FontWeight.w500,
+                           color: isActive
+                               ? CupertinoColors.systemBlue
+                               : const Color(0xFF8E8E93),
+                         ),
+                       );
+                     }).toList(),
+                   ),
+                 ),
               ],
             ),
           ),
