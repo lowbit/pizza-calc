@@ -240,6 +240,11 @@ different buttons lead there.
   eat at (02:50, not 02:47).
 - 4 pizza types (`PizzaType` enum). Each carries its **own** defaults: hydration, doughballs,
   grams/ball, salt/sugar/oil %, default fermentation mode, cold-ferment days.
+  A fifth, **Chicago deep dish, is planned but not built**:
+  [`docs/chicago-plan.md`](docs/chicago-plan.md) is a ready-to-execute plan with the dough
+  percentages, both recipes, the five files to touch and what the existing tests already cover.
+  Read it before starting that work, and before changing `isPanStyle` or the hydration slider
+  range, which it depends on.
 - Percentages are baker's percentages **of flour**, so total always lands on
   `doughballs x gramsPerBall`. That sum is the invariant to check any calculation against.
 - Yeast: `base * sqrt(referenceHours / effectiveHours)`. Same-day ref = 8 h, cold ferment
