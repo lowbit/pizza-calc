@@ -1,8 +1,17 @@
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/services.dart';
-import 'package:pizza_calc/widgets/stepper_button.dart';
+/// A labelled value with −/+ buttons, and a tap target that opens a wheel.
+///
+/// The stepper buttons are plain `IconButton.filledTonal`s now: Material gives
+/// ripple, hover, focus and disabled states for free, which the previous
+/// hand-rolled `StepperButton` reimplemented with a timer and a bool.
 
-/// Reusable picker input widget for discrete values
+library;
+
+import 'package:flutter/material.dart';
+
+import '../styles/app_theme.dart';
+import '../utils/haptics.dart';
+import 'app_scaffolding.dart';
+
 class PickerInput extends StatelessWidget {
   final String title;
   final String value;
@@ -21,66 +30,77 @@ class PickerInput extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF1C1C1C),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: const Color.fromARGB(255, 46, 44, 44),
-          width: 0.5,
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              title,
-              style: const TextStyle(
-                fontSize: 17,
-                fontWeight: FontWeight.w500,
-                color: CupertinoColors.white,
+    final theme = Theme.of(context);
+
+    // `IconButton.filledTonal` defaults to `secondaryContainer`, which in this
+    // scheme is verdigris, the colour that means "done". Two big teal circles per
+    // card, on a form where nothing is done yet, is exactly the dilution the
+    // palette rules exist to prevent. Steppers are plumbing: keep them neutral
+    // and let the value they change carry the colour.
+    final stepperStyle = IconButton.styleFrom(
+      backgroundColor: theme.colorScheme.surfaceContainerHighest,
+      foregroundColor: theme.colorScheme.onSurface,
+      disabledForegroundColor: theme.colorScheme.outline,
+    );
+
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: theme.textTheme.titleMedium),
+          const SizedBox(height: AppSpacing.md),
+          Row(
+            children: [
+              IconButton.filledTonal(
+                style: stepperStyle,
+                onPressed: onDecrease == null
+                    ? null
+                    : () {
+                        Haptics.tick();
+                        onDecrease!();
+                      },
+                icon: const Icon(Icons.remove),
               ),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                StepperButton(
-                  icon: CupertinoIcons.minus,
-                  onPressed: onDecrease,
-                ),
-                Expanded(
-                  child: GestureDetector(
-                    onTap: () {
-                      HapticFeedback.selectionClick();
-                      onTap();
-                    },
-                    child: Container(
-                      height: 48,
-                      margin: const EdgeInsets.symmetric(horizontal: 12),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF2C2C2E),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Center(
-                        child: Text(
-                          value,
-                          style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w600,
-                            color: CupertinoColors.systemBlue,
-                          ),
-                        ),
+              Expanded(
+                child: InkWell(
+                  onTap: () {
+                    Haptics.select();
+                    onTap();
+                  },
+                  borderRadius: BorderRadius.circular(AppRadius.small),
+                  child: Container(
+                    height: 48,
+                    margin: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.sm,
+                    ),
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(AppRadius.small),
+                    ),
+                    child: Text(
+                      value,
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        color: theme.colorScheme.primary,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ),
                 ),
-                StepperButton(icon: CupertinoIcons.plus, onPressed: onIncrease),
-              ],
-            ),
-          ],
-        ),
+              ),
+              IconButton.filledTonal(
+                style: stepperStyle,
+                onPressed: onIncrease == null
+                    ? null
+                    : () {
+                        Haptics.tick();
+                        onIncrease!();
+                      },
+                icon: const Icon(Icons.add),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

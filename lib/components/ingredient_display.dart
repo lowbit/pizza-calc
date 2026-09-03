@@ -1,6 +1,18 @@
-import 'package:flutter/cupertino.dart';
+/// The ingredients card.
+///
+/// Rows are driven by which keys exist in the map, which is how poolish makes
+/// the yeast row disappear and sugar/oil appear only for the styles that use
+/// them.
 
-/// Individual ingredient row component
+library;
+
+import 'package:flutter/material.dart';
+
+import '../styles/app_theme.dart';
+import '../widgets/app_scaffolding.dart';
+
+/// One ingredient. Kept as a public widget because the tests sum across these
+/// to assert the recipe totals the requested dough weight.
 class IngredientRow extends StatelessWidget {
   final String name;
   final double amount;
@@ -17,113 +29,76 @@ class IngredientRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
-      decoration: BoxDecoration(
-        border: isLast
-            ? null
-            : const Border(
-                bottom: BorderSide(color: Color(0xFF2C2C2E), width: 0.5),
+    final theme = Theme.of(context);
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.md,
+            vertical: 14,
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(name, style: theme.textTheme.bodyLarge),
+              Text(
+                '${amount.toStringAsFixed(1)}$unit',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  color: theme.colorScheme.primary,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            name,
-            style: const TextStyle(
-              fontSize: 17,
-              fontWeight: FontWeight.w500,
-              color: CupertinoColors.white,
-            ),
+            ],
           ),
-          Text(
-            '${amount.toStringAsFixed(1)}$unit',
-            style: const TextStyle(
-              fontSize: 17,
-              fontWeight: FontWeight.w600,
-              color: CupertinoColors.systemBlue,
-            ),
-          ),
-        ],
-      ),
+        ),
+        if (!isLast) const Divider(height: 1, indent: AppSpacing.md),
+      ],
     );
   }
 }
 
-/// Complete ingredients display section
 class IngredientsDisplay extends StatelessWidget {
   final Map<String, double> ingredients;
   final String? flourType;
 
   const IngredientsDisplay({
-    super.key, 
+    super.key,
     required this.ingredients,
     this.flourType,
   });
 
   @override
   Widget build(BuildContext context) {
-    // Build ingredient list based on what's available in the ingredients map
-    final List<Map<String, String>> ingredientList = [];
-
-    if (ingredients.containsKey('flour')) {
-      ingredientList.add({
-        'name': flourType != null ? 'Flour ($flourType)' : 'Flour', 
-        'key': 'flour', 
-        'unit': 'g'
-      });
-    }
-    if (ingredients.containsKey('water')) {
-      ingredientList.add({'name': 'Water', 'key': 'water', 'unit': 'g'});
-    }
-    if (ingredients.containsKey('salt')) {
-      ingredientList.add({'name': 'Salt', 'key': 'salt', 'unit': 'g'});
-    }
-    if (ingredients.containsKey('sugar')) {
-      ingredientList.add({'name': 'Sugar', 'key': 'sugar', 'unit': 'g'});
-    }
-    if (ingredients.containsKey('oil')) {
-      ingredientList.add({'name': 'Olive Oil', 'key': 'oil', 'unit': 'g'});
-    }
-    if (ingredients.containsKey('yeast')) {
-      ingredientList.add({'name': 'Yeast', 'key': 'yeast', 'unit': 'g'});
-    }
-    if (ingredients.containsKey('poolish')) {
-      ingredientList.add({'name': 'Poolish', 'key': 'poolish', 'unit': 'g'});
-    }
+    // Order is fixed and meaningful: it is the order you weigh them out in.
+    final rows = <({String name, String key})>[
+      if (ingredients.containsKey('flour'))
+        (name: flourType != null ? 'Flour ($flourType)' : 'Flour', key: 'flour'),
+      if (ingredients.containsKey('water')) (name: 'Water', key: 'water'),
+      if (ingredients.containsKey('salt')) (name: 'Salt', key: 'salt'),
+      if (ingredients.containsKey('sugar')) (name: 'Sugar', key: 'sugar'),
+      if (ingredients.containsKey('oil')) (name: 'Olive Oil', key: 'oil'),
+      if (ingredients.containsKey('yeast')) (name: 'Yeast', key: 'yeast'),
+      if (ingredients.containsKey('poolish')) (name: 'Poolish', key: 'poolish'),
+    ];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Ingredients',
-          style: TextStyle(
-            fontSize: 22,
-            fontWeight: FontWeight.w700,
-            color: CupertinoColors.white,
-          ),
-        ),
-        const SizedBox(height: 20),
-        Container(
-          decoration: BoxDecoration(
-            color: const Color(0xFF1C1C1C),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFF2C2C2E), width: 0.5),
-          ),
+        const SectionHeader(title: 'Ingredients'),
+        const SizedBox(height: AppSpacing.md),
+        AppCard(
+          padding: EdgeInsets.zero,
           child: Column(
-            children: ingredientList.asMap().entries.map((entry) {
-              final index = entry.key;
-              final ingredient = entry.value;
-              final isLast = index == ingredientList.length - 1;
-
-              return IngredientRow(
-                name: ingredient['name'] as String,
-                amount: ingredients[ingredient['key']] ?? 0.0,
-                unit: ingredient['unit'] as String,
-                isLast: isLast,
-              );
-            }).toList(),
+            children: [
+              for (var i = 0; i < rows.length; i++)
+                IngredientRow(
+                  name: rows[i].name,
+                  amount: ingredients[rows[i].key] ?? 0.0,
+                  unit: 'g',
+                  isLast: i == rows.length - 1,
+                ),
+            ],
           ),
         ),
       ],

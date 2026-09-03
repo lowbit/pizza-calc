@@ -1,15 +1,25 @@
-import 'dart:math' show sqrt;
-
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/services.dart';
-import 'package:pizza_calc/components/poolish_calculator.dart';
-import 'package:pizza_calc/widgets/picker_input.dart';
-import 'widgets/enhanced_slider.dart';
-import 'components/ingredient_display.dart';
-import 'widgets/segmented_control_section.dart';
-import 'components/steps_display.dart';
+import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+
+import 'components/bake_issue_banner.dart';
+import 'components/bake_summary_card.dart';
+import 'components/dough_settings_section.dart';
+import 'components/ingredient_display.dart';
+import 'components/poolish_calculator.dart';
+import 'components/steps_checklist.dart';
+import 'data/recipes.dart';
+import 'models/bake_session.dart';
+import 'models/bake_step.dart';
+import 'models/pizza_type.dart';
+import 'services/bake_notifications.dart';
+import 'services/bake_schedule.dart';
+import 'services/dough_calculator.dart';
+import 'styles/app_theme.dart';
+import 'utils/haptics.dart';
+import 'utils/time_format.dart';
+import 'widgets/time_wheel_picker.dart';
+import 'widgets/value_picker.dart';
 
 void main() {
   runApp(const PizzaCalculatorApp());
@@ -20,15 +30,12 @@ class PizzaCalculatorApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const CupertinoApp(
-      title: 'Pizza Calculator',
-      theme: CupertinoThemeData(
-        primaryColor: CupertinoColors.systemBlue,
-        brightness: Brightness.dark,
-        barBackgroundColor: Color(0xFF1C1C1C),
-        scaffoldBackgroundColor: Color(0xFF000000),
-      ),
-      home: PizzaCalculatorScreen(),
+    return MaterialApp(
+      // Matches android:label, so the launcher and the task switcher agree.
+      title: 'Pizzazz',
+      debugShowCheckedModeBanner: false,
+      theme: buildAppTheme(),
+      home: const PizzaCalculatorScreen(),
     );
   }
 }
@@ -40,1092 +47,764 @@ class PizzaCalculatorScreen extends StatefulWidget {
   State<PizzaCalculatorScreen> createState() => _PizzaCalculatorScreenState();
 }
 
-// Pizza type definitions with complete defaults
-class PizzaTypeConfig {
-  final String displayName;
-  final String flourType;
-  final double defaultHydration;
-  final int defaultDoughballs;
-  final double defaultGramsPerBall;
-  final double saltPercent;
-  final double sugarPercent;
-  final double oilPercent;
-  final int defaultFermentationMode; // 0 = same day, 1 = cold ferment
-  final int defaultColdFermentDays;
-
-  const PizzaTypeConfig({
-    required this.displayName,
-    required this.flourType,
-    required this.defaultHydration,
-    required this.defaultDoughballs,
-    required this.defaultGramsPerBall,
-    required this.saltPercent,
-    required this.sugarPercent,
-    required this.oilPercent,
-    this.defaultFermentationMode = 0,
-    this.defaultColdFermentDays = 2,
-  });
-}
-
-enum PizzaType {
-  neapolitan,
-  newYork,
-  sicilian,
-  roman;
-
-  PizzaTypeConfig get config {
-    switch (this) {
-      case PizzaType.neapolitan:
-        return const PizzaTypeConfig(
-          displayName: 'Neapolitan',
-          flourType: '00',
-          defaultHydration: 60.0,
-          defaultDoughballs: 4,
-          defaultGramsPerBall: 250.0,
-          saltPercent: 2.5,
-          sugarPercent: 0.0,
-          oilPercent: 0.0,
-          defaultFermentationMode: 0, // Same day
-          defaultColdFermentDays: 2,
-        );
-      case PizzaType.newYork:
-        return const PizzaTypeConfig(
-          displayName: 'New York',
-          flourType: 'Bread Flour',
-          defaultHydration: 64.0,
-          defaultDoughballs: 4,
-          defaultGramsPerBall: 300.0,
-          saltPercent: 2.5,
-          sugarPercent: 1.0,
-          oilPercent: 2.0,
-          defaultFermentationMode: 1, // Cold ferment
-          defaultColdFermentDays: 2,
-        );
-      case PizzaType.sicilian:
-        return const PizzaTypeConfig(
-          displayName: 'Sicilian/Detroit',
-          flourType: 'Bread Flour',
-          defaultHydration: 74.0,
-          defaultDoughballs: 1,
-          defaultGramsPerBall: 800.0,
-          saltPercent: 2.5,
-          sugarPercent: 0.0,
-          oilPercent: 3.0,
-          defaultFermentationMode: 1, // Cold ferment
-          defaultColdFermentDays: 2,
-        );
-      case PizzaType.roman:
-        return const PizzaTypeConfig(
-          displayName: 'Roman',
-          flourType: '00',
-          defaultHydration: 80.0,
-          defaultDoughballs: 1,
-          defaultGramsPerBall: 800.0,
-          saltPercent: 2.5,
-          sugarPercent: 0.0,
-          oilPercent: 4.0,
-          defaultFermentationMode: 1, // Cold ferment
-          defaultColdFermentDays: 2,
-        );
-    }
-  }
-}
-
 class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
+  static const _sessionKey = 'activeBakeSession';
+
   int _doughballs = 4;
   double _gramsPerBall = 250.0;
-  double _hydrationPercent = 60.0; // Will be set by pizza type
+  double _hydrationPercent = 62.0;
   PizzaType _pizzaType = PizzaType.neapolitan;
-  int _yeastType =
-      1; // 0 = fresh (2%), 1 = instant/active dry (0.5%), 2 = poolish
-  double _poolishAmount = 300.0; // Amount of poolish to use
-  bool _isScreenAwake = false; // Controls whether the screen stays awake
-  int _fermentationMode = 0; // 0 = same day (room temp), 1 = cold ferment (fridge)
-  int _targetBakeHour = 19; // Default bake time: 7:00 PM
+  int _yeastType = 1; // 0 = fresh, 1 = instant/active dry, 2 = poolish
+  double _poolishAmount = 300.0;
+  bool _isScreenAwake = false;
+  int _fermentationMode = 0; // 0 = same day, 1 = cold ferment
+  int _targetBakeHour = 19;
   int _targetBakeMinute = 0;
-  int _coldFermentDays = 2; // Default: 2 days cold ferment
-  DateTime _planStartTime = DateTime.now(); // Snapshot of when the plan was created
+  int _coldFermentDays = 2;
 
-  // Compute effective fermentation hours for yeast calculation
-  double get _effectiveFermentationHours {
-    if (_fermentationMode == 0) {
-      final now = DateTime.now();
-      final target = DateTime(
-        now.year, now.month, now.day,
-        _targetBakeHour, _targetBakeMinute,
-      );
-      final diffMinutes = target.difference(now).inMinutes;
-      if (diffMinutes < 120) return 2.0; // Minimum 2 hours
-      return diffMinutes / 60.0;
-    } else {
-      return (_coldFermentDays * 24).toDouble();
+  /// The bake actually under way, if any. While this is non-null the recipe is
+  /// locked: you cannot re-weigh flour that is already mixed, and nothing may
+  /// silently shift the timeline you are following.
+  BakeSession? _session;
+
+  AlarmCapability _alarms = AlarmCapability.none;
+
+  bool get _isBaking => _session != null;
+
+  @override
+  void initState() {
+    super.initState();
+    _restoreSession();
+  }
+
+  // ── Persistence ───────────────────────────────────────────────
+
+  Future<void> _restoreSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+
+    final savedType = prefs.getString('lastPizzaType');
+    if (savedType != null) {
+      setState(() => _pizzaType = PizzaType.fromName(savedType));
+    }
+
+    await _loadSavedSettings();
+    if (!mounted) return;
+
+    final session = BakeSession.decode(prefs.getString(_sessionKey));
+    if (session != null) {
+      setState(() {
+        _session = session;
+        // Mirror the frozen recipe into the inputs so the summary and the
+        // ingredient list agree with what is actually in the bowl.
+        _applyInputs(session.inputs);
+      });
+    }
+
+    if (prefs.getBool('isScreenAwake') ?? false) {
+      await WakelockPlus.toggle(enable: true);
+      if (!mounted) return;
+      setState(() => _isScreenAwake = true);
     }
   }
 
-  // Format time for display (e.g., "19:00")
-  String _formatTimeOfDay(int hour, int minute) {
-    return '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
+  void _applyInputs(DoughInputs inputs) {
+    _pizzaType = inputs.pizzaType;
+    _doughballs = inputs.doughballs;
+    _gramsPerBall = inputs.gramsPerBall;
+    _hydrationPercent = inputs.hydrationPercent;
+    _yeastType = inputs.yeastType;
+    _poolishAmount = inputs.poolishAmount;
+    _fermentationMode = inputs.fermentationMode;
+    _coldFermentDays = inputs.coldFermentDays;
+    _targetBakeHour = inputs.targetBakeHour;
+    _targetBakeMinute = inputs.targetBakeMinute;
   }
 
-  // Format duration for display (e.g., "5h 30m")
-  String _formatDuration(double hours) {
-    final h = hours.floor();
-    final m = ((hours - h) * 60).round();
-    if (h == 0) return '${m}m';
-    if (m == 0) return '${h}h';
-    return '${h}h ${m}m';
-  }
-
-  // Get minutes from now to target bake time (for same day mode)
-  int get _minutesToBakeTime {
-    final now = DateTime.now();
-    final target = DateTime(
-      now.year, now.month, now.day,
-      _targetBakeHour, _targetBakeMinute,
-    );
-    return target.difference(now).inMinutes;
-  }
-
-  // Dynamic yeast percentage based on type, pizza type, and fermentation time
-  double get _yeastPercent {
-    if (_yeastType == 2) return 0.0; // Poolish has its own yeast
-
-    // Base yeast percentages at reference fermentation time
-    // Fresh yeast (type 0) is ~3x instant (type 1) by weight
-    // Same day (room temp): reference is 8h
-    // Cold ferment (fridge): reference is 24h
-    Map<int, Map<int, double>> baseYeastForReference = {
-      0: {0: 0.9, 1: 0.3},  // Same day (room temp, 8h reference)
-      1: {0: 0.6, 1: 0.2},  // Cold ferment (fridge, 24h reference)
-    };
-
-    Map<int, int> referenceTime = {
-      0: 8,   // Same day reference
-      1: 24,  // Cold ferment reference
-    };
-
-    double basePercent = baseYeastForReference[_fermentationMode]?[_yeastType] ?? 0.3;
-    int refTime = referenceTime[_fermentationMode] ?? 8;
-
-    // Calculate yeast using inverse square root relationship
-    // Standard baker's formula: yeast adjusts inversely with square root of time
-    double timeRatio = refTime / _effectiveFermentationHours;
-    double calculatedPercent = basePercent * sqrt(timeRatio.clamp(0.1, 16.0));
-
-    // Ensure reasonable bounds for yeast percentage
-    Map<int, List<double>> bounds = {
-      0: [0.2, 2.5],  // Fresh yeast bounds
-      1: [0.05, 1.0], // Instant yeast bounds
-    };
-
-    calculatedPercent = calculatedPercent.clamp(
-      bounds[_yeastType]![0],
-      bounds[_yeastType]![1],
-    );
-
-    return calculatedPercent;
-  }
-
-  // Load saved settings from SharedPreferences
   Future<void> _loadSavedSettings() async {
     final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
 
     setState(() {
-      final typeKey = _pizzaType.name;
+      final key = _pizzaType.name;
+      final config = _pizzaType.config;
       _hydrationPercent =
-          prefs.getDouble('${typeKey}_hydration') ??
-          _pizzaType.config.defaultHydration;
-      _doughballs =
-          prefs.getInt('${typeKey}_doughballs') ??
-          _pizzaType.config.defaultDoughballs;
+          prefs.getDouble('${key}_hydration') ?? config.defaultHydration;
+      _doughballs = prefs.getInt('${key}_doughballs') ?? config.defaultDoughballs;
       _gramsPerBall =
-          prefs.getDouble('${typeKey}_gramsPerBall') ??
-          _pizzaType.config.defaultGramsPerBall;
-      _yeastType = prefs.getInt('${typeKey}_yeastType') ?? 1;
-      _poolishAmount = prefs.getDouble('${typeKey}_poolishAmount') ?? 300.0;
+          prefs.getDouble('${key}_gramsPerBall') ?? config.defaultGramsPerBall;
+      _yeastType = prefs.getInt('${key}_yeastType') ?? 1;
+      _poolishAmount = prefs.getDouble('${key}_poolishAmount') ?? 300.0;
       _fermentationMode =
-          prefs.getInt('${typeKey}_fermentationMode') ??
-          _pizzaType.config.defaultFermentationMode;
-      _targetBakeHour = prefs.getInt('${typeKey}_targetBakeHour') ?? 19;
-      _targetBakeMinute = prefs.getInt('${typeKey}_targetBakeMinute') ?? 0;
+          prefs.getInt('${key}_fermentationMode') ??
+          config.defaultFermentationMode;
+      _targetBakeHour = prefs.getInt('${key}_targetBakeHour') ?? 19;
+      _targetBakeMinute = prefs.getInt('${key}_targetBakeMinute') ?? 0;
       _coldFermentDays =
-          prefs.getInt('${typeKey}_coldFermentDays') ??
-          _pizzaType.config.defaultColdFermentDays;
-      _planStartTime = DateTime.now();
+          prefs.getInt('${key}_coldFermentDays') ??
+          config.defaultColdFermentDays;
     });
   }
 
-  // Save current settings to SharedPreferences
   Future<void> _saveSettings() async {
     final prefs = await SharedPreferences.getInstance();
-    final typeKey = _pizzaType.name;
-
-    await prefs.setDouble('${typeKey}_hydration', _hydrationPercent);
-    await prefs.setInt('${typeKey}_doughballs', _doughballs);
-    await prefs.setDouble('${typeKey}_gramsPerBall', _gramsPerBall);
-    await prefs.setInt('${typeKey}_yeastType', _yeastType);
-    await prefs.setDouble('${typeKey}_poolishAmount', _poolishAmount);
-    await prefs.setInt('${typeKey}_fermentationMode', _fermentationMode);
-    await prefs.setInt('${typeKey}_targetBakeHour', _targetBakeHour);
-    await prefs.setInt('${typeKey}_targetBakeMinute', _targetBakeMinute);
-    await prefs.setInt('${typeKey}_coldFermentDays', _coldFermentDays);
+    final key = _pizzaType.name;
+    await prefs.setDouble('${key}_hydration', _hydrationPercent);
+    await prefs.setInt('${key}_doughballs', _doughballs);
+    await prefs.setDouble('${key}_gramsPerBall', _gramsPerBall);
+    await prefs.setInt('${key}_yeastType', _yeastType);
+    await prefs.setDouble('${key}_poolishAmount', _poolishAmount);
+    await prefs.setInt('${key}_fermentationMode', _fermentationMode);
+    await prefs.setInt('${key}_targetBakeHour', _targetBakeHour);
+    await prefs.setInt('${key}_targetBakeMinute', _targetBakeMinute);
+    await prefs.setInt('${key}_coldFermentDays', _coldFermentDays);
   }
 
-  // Check if current settings differ from defaults
-  bool get _hasCustomSettings {
-    return _hydrationPercent != _pizzaType.config.defaultHydration ||
-        _doughballs != _pizzaType.config.defaultDoughballs ||
-        _gramsPerBall != _pizzaType.config.defaultGramsPerBall ||
-        _yeastType != 1 ||
-        _poolishAmount != 300.0 ||
-        _fermentationMode != _pizzaType.config.defaultFermentationMode ||
-        _targetBakeHour != 19 ||
-        _targetBakeMinute != 0 ||
-        _coldFermentDays != _pizzaType.config.defaultColdFermentDays;
-  }
-
-  // Reset to default settings for current pizza type
-  Future<void> _resetToDefaults() async {
+  Future<void> _persistPizzaType(PizzaType type) async {
     final prefs = await SharedPreferences.getInstance();
-    final typeKey = _pizzaType.name;
-
-    await prefs.remove('${typeKey}_hydration');
-    await prefs.remove('${typeKey}_doughballs');
-    await prefs.remove('${typeKey}_gramsPerBall');
-    await prefs.remove('${typeKey}_yeastType');
-    await prefs.remove('${typeKey}_poolishAmount');
-    await prefs.remove('${typeKey}_fermentationMode');
-    await prefs.remove('${typeKey}_targetBakeHour');
-    await prefs.remove('${typeKey}_targetBakeMinute');
-    await prefs.remove('${typeKey}_coldFermentDays');
-
-    setState(() {
-      _hydrationPercent = _pizzaType.config.defaultHydration;
-      _doughballs = _pizzaType.config.defaultDoughballs;
-      _gramsPerBall = _pizzaType.config.defaultGramsPerBall;
-      _yeastType = 1;
-      _poolishAmount = 300.0;
-      _fermentationMode = _pizzaType.config.defaultFermentationMode;
-      _targetBakeHour = 19;
-      _targetBakeMinute = 0;
-      _coldFermentDays = _pizzaType.config.defaultColdFermentDays;
-    });
+    await prefs.setString('lastPizzaType', type.name);
   }
 
-  // Calculate ingredients based on inputs
-  Map<String, double> _calculateIngredients() {
-    final double totalDoughWeight = _doughballs * _gramsPerBall;
-
-    if (_yeastType == 2) {
-      // Poolish calculation
-      final double poolishFlour =
-          _poolishAmount / 2; // 100% hydration = 50% flour, 50% water
-      final double poolishWater = _poolishAmount / 2;
-
-      // Calculate remaining flour needed
-      final double multiplier =
-          1 +
-          (_hydrationPercent / 100) +
-          (_pizzaType.config.saltPercent / 100) +
-          (_pizzaType.config.sugarPercent / 100) +
-          (_pizzaType.config.oilPercent / 100);
-      final double totalFlourNeeded = totalDoughWeight / multiplier;
-      final double remainingFlour = totalFlourNeeded - poolishFlour;
-
-      // Calculate remaining water needed
-      final double totalWaterNeeded =
-          totalFlourNeeded * (_hydrationPercent / 100);
-      final double remainingWater = totalWaterNeeded - poolishWater;
-
-      final Map<String, double> ingredients = {
-        'flour': remainingFlour,
-        'water': remainingWater,
-        'salt': totalFlourNeeded * (_pizzaType.config.saltPercent / 100),
-        'poolish': _poolishAmount,
-      };
-
-      // Add sugar and oil based on pizza type
-      if (_pizzaType.config.sugarPercent > 0) {
-        ingredients['sugar'] =
-            totalFlourNeeded * (_pizzaType.config.sugarPercent / 100);
-      }
-      if (_pizzaType.config.oilPercent > 0) {
-        ingredients['oil'] =
-            totalFlourNeeded * (_pizzaType.config.oilPercent / 100);
-      }
-
-      return ingredients;
+  Future<void> _persistSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    final session = _session;
+    if (session == null) {
+      await prefs.remove(_sessionKey);
     } else {
-      // Standard yeast calculation
-      final double multiplier =
-          1 +
-          (_hydrationPercent / 100) +
-          (_pizzaType.config.saltPercent / 100) +
-          (_pizzaType.config.sugarPercent / 100) +
-          (_pizzaType.config.oilPercent / 100) +
-          (_yeastPercent / 100);
-      final double flourWeight = totalDoughWeight / multiplier;
-
-      final Map<String, double> ingredients = {
-        'flour': flourWeight,
-        'water': flourWeight * (_hydrationPercent / 100),
-        'salt': flourWeight * (_pizzaType.config.saltPercent / 100),
-        'yeast': flourWeight * (_yeastPercent / 100),
-      };
-
-      // Add sugar and oil based on pizza type
-      if (_pizzaType.config.sugarPercent > 0) {
-        ingredients['sugar'] =
-            flourWeight * (_pizzaType.config.sugarPercent / 100);
-      }
-      if (_pizzaType.config.oilPercent > 0) {
-        ingredients['oil'] = flourWeight * (_pizzaType.config.oilPercent / 100);
-      }
-
-      return ingredients;
+      await prefs.setString(_sessionKey, session.encode());
     }
   }
+
+  // ── Derived state ─────────────────────────────────────────────
+
+  DoughInputs get _currentInputs => DoughInputs(
+    pizzaType: _pizzaType,
+    doughballs: _doughballs,
+    gramsPerBall: _gramsPerBall,
+    hydrationPercent: _hydrationPercent,
+    yeastType: _yeastType,
+    poolishAmount: _poolishAmount,
+    fermentationMode: _fermentationMode,
+    coldFermentDays: _coldFermentDays,
+    targetBakeHour: _targetBakeHour,
+    targetBakeMinute: _targetBakeMinute,
+  );
+
+  /// When the pizza should go in, for a plan that has not started yet.
+  ///
+  /// Same-day rolls to tomorrow once today's slot has passed, so "bake at
+  /// 19:00" always means the next 19:00 rather than a time in the past.
+  DateTime get _plannedTargetBake {
+    final now = DateTime.now();
+    if (_fermentationMode == 0) {
+      var target = DateTime(
+        now.year,
+        now.month,
+        now.day,
+        _targetBakeHour,
+        _targetBakeMinute,
+      );
+      if (!target.isAfter(now)) target = target.add(const Duration(days: 1));
+      return target;
+    }
+    final day = DateTime(
+      now.year,
+      now.month,
+      now.day,
+    ).add(Duration(days: _coldFermentDays));
+    return DateTime(
+      day.year,
+      day.month,
+      day.day,
+      _targetBakeHour,
+      _targetBakeMinute,
+    );
+  }
+
+  DateTime get _targetBake => _session?.targetBake ?? _plannedTargetBake;
+
+  double get _fermentationHours => effectiveFermentationHours(
+    _currentInputs,
+    from: _session?.startedAt ?? DateTime.now(),
+    targetBake: _targetBake,
+  );
+
+  BakeSchedule get _schedule {
+    final now = DateTime.now();
+    final session = _session;
+    if (session != null) {
+      return buildSchedule(
+        specs: stepsFor(
+          session.inputs.pizzaType,
+          isColdFerment: session.inputs.isColdFerment,
+        ),
+        anchorStart: session.startedAt,
+        targetBake: session.targetBake,
+        now: now,
+        completed: session.completed,
+        started: true,
+      );
+    }
+    return buildSchedule(
+      specs: stepsFor(_pizzaType, isColdFerment: _fermentationMode == 1),
+      anchorStart: now,
+      targetBake: _plannedTargetBake,
+      now: now,
+    );
+  }
+
+  /// Ingredients come from the session once baking, so the numbers on screen
+  /// stay the numbers that were weighed out.
+  Map<String, double> get _ingredients =>
+      _session?.ingredients ??
+      computeIngredients(_currentInputs, fermentationHours: _fermentationHours);
+
+  bool get _hasCustomSettings {
+    final config = _pizzaType.config;
+    return _hydrationPercent != config.defaultHydration ||
+        _doughballs != config.defaultDoughballs ||
+        _gramsPerBall != config.defaultGramsPerBall ||
+        _yeastType != 1 ||
+        _poolishAmount != 300.0 ||
+        _fermentationMode != config.defaultFermentationMode ||
+        _targetBakeHour != 19 ||
+        _targetBakeMinute != 0 ||
+        _coldFermentDays != config.defaultColdFermentDays;
+  }
+
+  // ── Bake lifecycle ────────────────────────────────────────────
+
+  Future<void> _startBake() async {
+    Haptics.commit();
+    final now = DateTime.now();
+    final session = BakeSession(
+      inputs: _currentInputs,
+      ingredients: computeIngredients(
+        _currentInputs,
+        fermentationHours: _fermentationHours,
+      ),
+      startedAt: now,
+      targetBake: _plannedTargetBake,
+    );
+
+    setState(() => _session = session);
+    await _persistSession();
+
+    // Ask for notification permission here rather than at first launch: this
+    // is the moment it makes sense to the baker.
+    final capability = await BakeNotifications.instance.requestPermissions();
+    if (!mounted) return;
+    setState(() => _alarms = capability);
+    await _syncAlarms();
+  }
+
+  Future<void> _syncAlarms() async {
+    if (!_alarms.notificationsAllowed) return;
+    await BakeNotifications.instance.syncForSchedule(
+      _schedule,
+      exactAllowed: _alarms.exactAllowed,
+    );
+  }
+
+  Future<void> _completeStep(ScheduledStep step) async {
+    final session = _session;
+    if (session == null) return;
+
+    final now = DateTime.now();
+    if (step.isRushedAt(now) && !await _confirmEarlyFinish(step, now)) return;
+    if (!mounted) return;
+
+    setState(() => _session = session.completing(step.spec.id, DateTime.now()));
+    await _persistSession();
+    await _syncAlarms();
+  }
+
+  /// Asks before ticking a step that the dough has not really had time for.
+  ///
+  /// Only steps with a [StepSpec.floorMinutes] can get here, so mixing or
+  /// baking faster than planned never asks. It is a question, not a block: the
+  /// recipe tells you to judge a proof by feel, a warm kitchen genuinely does
+  /// halve it, and the dough may have been mixed before the app was opened.
+  /// It also catches the mis-tap, which is the expensive case, because a tick
+  /// stamps a real timestamp and re-plans everything after it.
+  Future<bool> _confirmEarlyFinish(ScheduledStep step, DateTime now) async {
+    final elapsed = step.elapsedAt(now);
+    final floor = step.spec.floorMinutes!;
+    // Two shapes, because "has had 0m of a planned 17h" is not a sentence
+    // anyone would write.
+    final opening = elapsed.inMinutes < 1
+        ? '${step.spec.title} has only just started. It was planned for '
+              '${formatSpan(step.duration)} and usually needs at least '
+              '${formatMinutes(floor)}.'
+        : '${step.spec.title} has had ${formatDuration(elapsed)} of a planned '
+              '${formatSpan(step.duration)}, and usually needs at least '
+              '${formatMinutes(floor)}.';
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        // No figures in the title: it renders on the display face, and
+        // Fraunces has old-style figures. The numbers live in the body.
+        title: const Text('Finish this early?'),
+        content: Text(
+          '$opening Finishing now records the real time and brings the rest '
+          'of the bake forward.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Not yet'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Mark done'),
+          ),
+        ],
+      ),
+    );
+    return confirmed ?? false;
+  }
+
+  /// Undo a step *and everything after it*. The checklist button already
+  /// fires the haptic, so this must not, it used to, and undo buzzed twice.
+  Future<void> _undoStep(ScheduledStep step) async {
+    final session = _session;
+    if (session == null) return;
+    // Read the order before mutating. `_schedule` is a getter that rebuilds
+    // from `_session`, and the recipe order is the same either side of an undo
+    //, but computing it up front keeps that independence obvious.
+    final orderedIds = [for (final s in _schedule.steps) s.spec.id];
+    setState(
+      () => _session = session.uncompletingFrom(step.spec.id, orderedIds),
+    );
+    await _persistSession();
+    await _syncAlarms();
+  }
+
+  Future<void> _moveBakeTime(DateTime suggested) async {
+    final session = _session;
+    if (session != null) {
+      setState(() => _session = session.copyWith(targetBake: suggested));
+      await _persistSession();
+      await _syncAlarms();
+      return;
+    }
+    setState(() {
+      _targetBakeHour = suggested.hour;
+      _targetBakeMinute = suggested.minute;
+    });
+    await _saveSettings();
+  }
+
+  Future<void> _confirmStartOver() async {
+    // Nothing to lose once the bake is over, the dialog would be asking you
+    // to confirm discarding a pizza you have already eaten. Clearing a
+    // finished bake is just tidying up.
+    if (_schedule.isComplete) {
+      await _endBake();
+      return;
+    }
+
+    Haptics.select();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Discard this bake?'),
+        content: const Text(
+          'This throws away the bake in progress, including the times you have '
+          'already ticked off.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Keep baking'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: const Text('Discard'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed ?? false) await _endBake();
+  }
+
+  Future<void> _endBake() async {
+    Haptics.commit();
+    setState(() => _session = null);
+    await _persistSession();
+    await BakeNotifications.instance.cancelAll();
+  }
+
+  Future<void> _setPhoneAlarm(ScheduledStep step) async {
+    final ok = await BakeNotifications.instance.setPhoneAlarm(
+      step.end,
+      'Pizza: ${step.spec.title} done',
+    );
+    if (!mounted || ok) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("Couldn't open a clock app on this device."),
+      ),
+    );
+  }
+
+  // ── Build ─────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    final ingredients = _calculateIngredients();
-
-    return CupertinoPageScaffold(
-      backgroundColor: const Color(0xFF000000),
-      navigationBar: CupertinoNavigationBar(
-        middle: GestureDetector(
-          onTap: () {
-            HapticFeedback.selectionClick();
-            _showPizzaTypeSelector();
-          },
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                '${_pizzaType.config.displayName} Pizza',
-                style: const TextStyle(
-                  color: CupertinoColors.white,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(width: 4),
-              const Icon(
-                CupertinoIcons.chevron_down,
-                color: CupertinoColors.white,
-                size: 16,
-              ),
-            ],
-          ),
+    final theme = Theme.of(context);
+    final schedule = _schedule;
+    final issues = [
+      ...schedule.issues,
+      if (!_isBaking)
+        ...doughIssues(
+          _currentInputs,
+          start: DateTime.now(),
+          targetBake: _plannedTargetBake,
         ),
-        backgroundColor: const Color(0xFF1C1C1C),
-        border: null,
-        leading: _hasCustomSettings
-            ? GestureDetector(
-                onTap: () {
-                  HapticFeedback.selectionClick();
-                  showCupertinoDialog(
-                    context: context,
-                    builder: (context) => CupertinoAlertDialog(
-                      title: const Text('Reset Settings'),
-                      content: const Text(
-                        'Reset all settings for this pizza type to defaults?',
-                      ),
-                      actions: [
-                        CupertinoDialogAction(
-                          isDestructiveAction: true,
-                          onPressed: () {
-                            HapticFeedback.mediumImpact();
-                            Navigator.pop(context);
-                            _resetToDefaults();
-                          },
-                          child: const Text('Reset'),
-                        ),
-                        CupertinoDialogAction(
-                          onPressed: () {
-                            HapticFeedback.selectionClick();
-                            Navigator.pop(context);
-                          },
-                          child: const Text('Cancel'),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-                child: const Icon(
-                  CupertinoIcons.refresh,
-                  color: CupertinoColors.systemBlue,
-                  size: 24,
+    ];
+
+    return Scaffold(
+      appBar: AppBar(
+        title: _isBaking
+            ? Text(_pizzaType.config.displayName)
+            : TextButton.icon(
+                onPressed: _showPizzaTypeSelector,
+                iconAlignment: IconAlignment.end,
+                style: TextButton.styleFrom(
+                  foregroundColor: theme.colorScheme.onSurface,
+                  textStyle: theme.textTheme.titleLarge,
                 ),
+                icon: const Icon(Icons.arrow_drop_down),
+                label: Text(_pizzaType.config.displayName),
+              ),
+        leading: (!_isBaking && _hasCustomSettings)
+            ? IconButton(
+                onPressed: _confirmReset,
+                icon: const Icon(Icons.refresh),
+                tooltip: 'Reset to defaults',
               )
             : null,
-        trailing: GestureDetector(
-          onTap: () async {
-            try {
-              // First async gap: getting preferences.
-              final prefs = await SharedPreferences.getInstance();
-
-              // FIX: Check if the widget is still mounted *before* using its context.
-              // Using context.mounted is the modern, recommended approach.
-              if (!context.mounted) return;
-
-              final hasSeenWakelockExplanation =
-                  prefs.getBool('hasSeenWakelockExplanation') ?? false;
-
-              if (!hasSeenWakelockExplanation) {
-                // The context is safe to use here because we just checked it.
-                await showCupertinoDialog(
-                  context: context,
-                  builder: (context) => CupertinoAlertDialog(
-                    title: const Text('Keep Screen On'),
-                    content: const Text(
-                      'This feature keeps your screen on while you make pizza. Useful when your hands are covered in flour! 🍕\n\nYou can toggle this any time using the sun icon.',
-                    ),
-                    actions: [
-                      CupertinoDialogAction(
-                        onPressed: () {
-                          HapticFeedback.selectionClick();
-                          Navigator.pop(context);
-                        },
-                        child: const Text('Got it!'),
-                      ),
-                    ],
-                  ),
-                );
-
-                // FIX: Check AGAIN after the dialog closes (another async gap).
-                if (!context.mounted) return;
-                await prefs.setBool('hasSeenWakelockExplanation', true);
-              }
-
-              // It's now safe to update the state.
-              setState(() {
-                _isScreenAwake = !_isScreenAwake;
-              });
-
-              // These last operations don't rely on the context, so they're fine.
-              await WakelockPlus.toggle(enable: _isScreenAwake);
-              await prefs.setBool('isScreenAwake', _isScreenAwake);
-              HapticFeedback.selectionClick();
-            } catch (e) {
-              // It's good practice to catch potential errors.
-              debugPrint("Error handling wakelock toggle: $e");
-            }
-          },
-          child: Icon(
-            _isScreenAwake
-                ? CupertinoIcons.sun_dust_fill
-                : CupertinoIcons.sun_dust,
-            color: _isScreenAwake
-                ? CupertinoColors.systemBlue
-                : CupertinoColors.systemGrey,
-            size: 24,
-          ),
-        ),
-      ),
-      child: Stack(
-        children: [
-          SafeArea(
-            child: SingleChildScrollView(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 20.0,
-                  vertical: 24.0,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildInputSection(),
-                    const SizedBox(height: 40),
-                    IngredientsDisplay(
-                      ingredients: ingredients,
-                      flourType: _pizzaType.config.flourType,
-                    ),
-                     const SizedBox(height: 24),
-                    StepsDisplay(
-                      pizzaType: _pizzaType.config.displayName,
-                      isColdFerment: _fermentationMode == 1,
-                      coldFermentDays: _coldFermentDays,
-                      targetBakeTime: _fermentationMode == 0
-                          ? DateTime(
-                              DateTime.now().year,
-                              DateTime.now().month,
-                              DateTime.now().day,
-                              _targetBakeHour,
-                              _targetBakeMinute,
-                            )
-                          : null,
-                      planStartTime: _fermentationMode == 0
-                          ? _planStartTime
-                          : null,
-                    ),
-                    const SizedBox(height: 20),
-                    // Developer credit
-                    Center(
-                      child: Column(
-                        children: [
-                          GestureDetector(
-                            onTap: () {
-                              HapticFeedback.lightImpact();
-                              _showHawaiianPizzaToast();
-                            },
-                            child: Text(
-                              'Made by Rijad Spahic',
-                              style: TextStyle(
-                                color: CupertinoColors.systemGrey,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w400,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+        actions: [
+          IconButton(
+            onPressed: _toggleWakelock,
+            isSelected: _isScreenAwake,
+            icon: const Icon(Icons.lightbulb_outline),
+            selectedIcon: const Icon(Icons.lightbulb),
+            tooltip: 'Keep screen on',
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildInputSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Dough Settings',
-          style: TextStyle(
-            fontSize: 22,
-            fontWeight: FontWeight.w700,
-            color: CupertinoColors.white,
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.md,
+            AppSpacing.sm,
+            AppSpacing.md,
+            AppSpacing.xl,
           ),
-        ),
-        const SizedBox(height: 20),
-        PickerInput(
-          title: 'Doughballs',
-          value: _doughballs.toString(),
-          onTap: _showDoughballsPicker,
-          onDecrease: _doughballs > 1
-              ? () => _updateDoughballs(_doughballs - 1)
-              : null,
-          onIncrease: _doughballs < 50
-              ? () => _updateDoughballs(_doughballs + 1)
-              : null,
-        ),
-        const SizedBox(height: 16),
-        PickerInput(
-          title: 'Grams per ball',
-          value: '${_gramsPerBall.round()}g',
-          onTap: _showWeightPicker,
-          onDecrease: _gramsPerBall > 150
-              ? () => _updateWeight(_gramsPerBall - 10)
-              : null,
-          onIncrease: _gramsPerBall < 1000
-              ? () => _updateWeight(_gramsPerBall + 10)
-              : null,
-        ),
-        const SizedBox(height: 16),
-        EnhancedSlider(
-          title: 'Hydration',
-          value: _hydrationPercent,
-          displayValue: '${_hydrationPercent.round()}%',
-          min: 55.0,
-          max: 80.0,
-          divisions: 25,
-          onChanged: _updateHydration,
-          onTap: _showHydrationPicker,
-          markers: const ['55%', '65%', '75%', '80%'],
-        ),
-        const SizedBox(height: 16),
-        SegmentedControlSection<int>(
-            title: 'Fermentation',
-            groupValue: _fermentationMode,
-            onValueChanged: _updateFermentationMode,
-            children: {
-              0: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-                child: Center(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (_isBaking)
+                BakeSummaryCard(
+                  session: _session!,
+                  schedule: schedule,
+                  onStartOver: _confirmStartOver,
+                  onBakeTimeTap: _showBakeTimePicker,
+                )
+              else
+                DoughSettingsSection(
+                  doughballs: _doughballs,
+                  gramsPerBall: _gramsPerBall,
+                  hydrationPercent: _hydrationPercent,
+                  fermentationMode: _fermentationMode,
+                  coldFermentDays: _coldFermentDays,
+                  yeastType: _yeastType,
+                  poolishAmount: _poolishAmount,
+                  plannedTargetBake: _plannedTargetBake,
+                  schedule: schedule,
+                  onDoughballs: _updateDoughballs,
+                  onDoughballsTap: _showDoughballsPicker,
+                  onWeight: _updateWeight,
+                  onWeightTap: _showWeightPicker,
+                  onHydration: _updateHydration,
+                  onHydrationTap: _showHydrationPicker,
+                  onFermentationMode: _updateFermentationMode,
+                  onColdFermentDays: _updateColdFermentDays,
+                  onColdFermentDaysTap: _showColdFermentDaysPicker,
+                  onBakeTimeTap: _showBakeTimePicker,
+                  onYeastType: _updateYeastType,
+                  onPoolishTap: _showPoolishCalculator,
+                ),
+              const SizedBox(height: AppSpacing.xl),
+              IngredientsDisplay(
+                ingredients: _ingredients,
+                flourType: _pizzaType.config.flourType,
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              if (issues.isNotEmpty) ...[
+                BakeIssueBanner(
+                  issues: issues,
+                  onApplySuggestion: _moveBakeTime,
+                  // Only offered while planning: the mode is part of the frozen
+                  // recipe once a bake is under way.
+                  onSwitchToColdFerment: _isBaking
+                      ? null
+                      : () => _updateFermentationMode(1),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+              ],
+              if (!_isBaking) ...[
+                FilledButton(
+                  onPressed: schedule.hasError ? null : _startBake,
                   child: Text(
-                    'Same Day',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      color: CupertinoColors.white,
-                    ),
+                    // Not "Start bake": the final step is literally
+                    // "Shape & bake", so that reads as "put it in now".
+                    schedule.hasError
+                        ? 'Not enough time to start'
+                        : 'Start now',
                   ),
                 ),
+                const SizedBox(height: AppSpacing.xl),
+              ],
+              StepsChecklist(
+                schedule: schedule,
+                started: _isBaking,
+                freezingNote: freezingNote(
+                  _pizzaType,
+                  isColdFerment: _fermentationMode == 1,
+                ),
+                onComplete: _completeStep,
+                onUndo: _undoStep,
+                onSetAlarm: _setPhoneAlarm,
               ),
-              1: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-                child: Center(
-                  child: Text(
-                    'Cold Ferment',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      color: CupertinoColors.white,
-                    ),
+              const SizedBox(height: AppSpacing.lg),
+              Center(
+                child: TextButton(
+                  onPressed: _showHawaiianPizzaToast,
+                  style: TextButton.styleFrom(
+                    foregroundColor: theme.colorScheme.onSurfaceVariant,
                   ),
-                ),
-              ),
-            },
-          ),
-          const SizedBox(height: 12),
-          if (_fermentationMode == 0) ...[
-            // Same Day: bake time picker with duration display
-            GestureDetector(
-              onTap: () {
-                HapticFeedback.selectionClick();
-                _showBakeTimePicker();
-              },
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1C1C1C),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFF2C2C2E), width: 0.5),
-                ),
-                child: Column(
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          'Bake at',
-                          style: TextStyle(
-                            fontSize: 17,
-                            fontWeight: FontWeight.w500,
-                            color: CupertinoColors.white,
-                          ),
-                        ),
-                        Row(
-                          children: [
-                            Text(
-                              _formatTimeOfDay(_targetBakeHour, _targetBakeMinute),
-                              style: const TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w600,
-                                color: CupertinoColors.systemBlue,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            const Icon(
-                              CupertinoIcons.chevron_right,
-                              color: Color(0xFF8E8E93),
-                              size: 16,
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Icon(
-                          _minutesToBakeTime < 120
-                              ? CupertinoIcons.exclamationmark_triangle_fill
-                              : CupertinoIcons.clock,
-                          size: 14,
-                          color: _minutesToBakeTime < 120
-                              ? CupertinoColors.systemYellow
-                              : const Color(0xFF8E8E93),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          _minutesToBakeTime < 0
-                              ? 'Time has passed — pick a later time'
-                              : _minutesToBakeTime < 120
-                                  ? 'Only ~${_formatDuration(_minutesToBakeTime / 60.0)} — dough needs more time'
-                                  : '~${_formatDuration(_effectiveFermentationHours)} fermentation at room temp',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: _minutesToBakeTime < 120
-                                ? CupertinoColors.systemYellow
-                                : const Color(0xFF8E8E93),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ] else ...[
-            // Cold Ferment: days picker
-            PickerInput(
-              title: 'Days in fridge',
-              value: '$_coldFermentDays ${_coldFermentDays == 1 ? 'day' : 'days'}',
-              onTap: _showColdFermentDaysPicker,
-              onDecrease: _coldFermentDays > 1
-                  ? () => _updateColdFermentDays(_coldFermentDays - 1)
-                  : null,
-              onIncrease: _coldFermentDays < 5
-                  ? () => _updateColdFermentDays(_coldFermentDays + 1)
-                  : null,
-            ),
-            if (_coldFermentDays >= 4) ...[
-              const SizedBox(height: 8),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                child: Row(
-                  children: [
-                    const Icon(
-                      CupertinoIcons.info_circle,
-                      size: 14,
-                      color: Color(0xFF8E8E93),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      _coldFermentDays == 4
-                          ? 'Extended — flavor peaks, watch for over-proofing'
-                          : 'Maximum — dough may lose structure',
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: Color(0xFF8E8E93),
-                      ),
-                    ),
-                  ],
+                  child: Text(
+                    'Made by Rijad Spahic',
+                    style: theme.textTheme.bodySmall,
+                  ),
                 ),
               ),
             ],
-          ],
-        const SizedBox(height: 16),
-        SegmentedControlSection<int>(
-          title: 'Yeast Type',
-          groupValue: _yeastType,
-          onValueChanged: _updateYeastType,
-          children: {
-            0: const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-              child: Center(
-                child: Text(
-                  'Fresh',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: CupertinoColors.white,
-                  ),
-                ),
-              ),
-            ),
-            1: const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-              child: Center(
-                child: Text(
-                  'Instant/Dry',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: CupertinoColors.white,
-                  ),
-                ),
-              ),
-            ),
-            2: const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-              child: Center(
-                child: Text(
-                  'Poolish',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: CupertinoColors.white,
-                  ),
-                ),
-              ),
-            ),
-          },
-        ),
-        if (_yeastType == 2) ...[
-          const SizedBox(height: 12),
-          GestureDetector(
-            onTap: () {
-              HapticFeedback.selectionClick();
-              _showPoolishCalculator();
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: const Color(0xFF2C2C2E),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    'Poolish Amount',
-                    style: TextStyle(
-                      color: CupertinoColors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  Row(
-                    children: [
-                      Text(
-                        '${_poolishAmount.round()}g',
-                        style: const TextStyle(
-                          color: CupertinoColors.systemBlue,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      const Icon(
-                        CupertinoIcons.chevron_right,
-                        color: Color(0xFF8E8E93),
-                        size: 14,
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
           ),
-        ],
-      ],
+        ),
+      ),
     );
   }
 
-  // Helper methods for updating values with haptic feedback
+  // ── Input handlers ────────────────────────────────────────────
+
   void _updateDoughballs(int value) {
-    setState(() {
-      _doughballs = value;
-    });
+    setState(() => _doughballs = value);
     _saveSettings();
-    HapticFeedback.lightImpact();
   }
 
   void _updateWeight(double value) {
-    setState(() {
-      _gramsPerBall = value;
-    });
+    setState(() => _gramsPerBall = value);
     _saveSettings();
-    HapticFeedback.lightImpact();
   }
 
   void _updateHydration(double value) {
-    setState(() {
-      _hydrationPercent = value;
-    });
+    setState(() => _hydrationPercent = value);
     _saveSettings();
-    HapticFeedback.selectionClick();
   }
 
   void _updateYeastType(int? yeastType) {
-    if (yeastType != null) {
-      setState(() {
-        _yeastType = yeastType;
-      });
-      _saveSettings();
-    }
-    HapticFeedback.selectionClick();
+    if (yeastType == null) return;
+    setState(() => _yeastType = yeastType);
+    _saveSettings();
   }
 
   void _updateFermentationMode(int? mode) {
-    if (mode != null) {
-      setState(() {
-        _fermentationMode = mode;
-        _planStartTime = DateTime.now();
-      });
-      _saveSettings();
-    }
-    HapticFeedback.selectionClick();
+    if (mode == null) return;
+    setState(() => _fermentationMode = mode);
+    _saveSettings();
   }
 
   void _updateColdFermentDays(int days) {
-    setState(() {
-      _coldFermentDays = days;
-    });
+    setState(() => _coldFermentDays = days);
     _saveSettings();
-    HapticFeedback.lightImpact();
   }
 
-  void _showBakeTimePicker() {
-    showCupertinoModalPopup<void>(
+  void _updatePizzaType(PizzaType pizzaType) {
+    setState(() => _pizzaType = pizzaType);
+    _persistPizzaType(pizzaType);
+    _loadSavedSettings();
+    Haptics.select();
+  }
+
+  Future<void> _confirmReset() async {
+    Haptics.select();
+    final confirmed = await showDialog<bool>(
       context: context,
-      builder: (BuildContext context) => Container(
-        height: 300,
-        color: const Color(0xFF1C1C1C),
-        child: Column(
-          children: [
-            Container(
-              height: 50,
-              decoration: const BoxDecoration(
-                border: Border(
-                  bottom: BorderSide(color: Color(0xFF3A3A3C), width: 0.5),
-                ),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  CupertinoButton(
-                    child: const Text('Cancel'),
-                    onPressed: () {
-                      HapticFeedback.selectionClick();
-                      Navigator.of(context).pop();
-                    },
-                  ),
-                  CupertinoButton(
-                    child: const Text('Done'),
-                    onPressed: () {
-                      HapticFeedback.selectionClick();
-                      Navigator.of(context).pop();
-                    },
-                  ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: CupertinoDatePicker(
-                mode: CupertinoDatePickerMode.time,
-                initialDateTime: DateTime(
-                  2024, 1, 1,
-                  _targetBakeHour, _targetBakeMinute,
-                ),
-                minuteInterval: 15,
-                use24hFormat: true,
-                backgroundColor: const Color(0xFF1C1C1C),
-                onDateTimeChanged: (DateTime value) {
-                  setState(() {
-                    _targetBakeHour = value.hour;
-                    _targetBakeMinute = value.minute;
-                    _planStartTime = DateTime.now();
-                  });
-                  _saveSettings();
-                },
-              ),
-            ),
-          ],
+      builder: (context) => AlertDialog(
+        title: const Text('Reset settings?'),
+        content: Text(
+          'Reset ${_pizzaType.config.displayName} back to its defaults.',
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: const Text('Reset'),
+          ),
+        ],
       ),
+    );
+    if (confirmed ?? false) await _resetToDefaults();
+  }
+
+  Future<void> _resetToDefaults() async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = _pizzaType.name;
+    for (final suffix in const [
+      'hydration',
+      'doughballs',
+      'gramsPerBall',
+      'yeastType',
+      'poolishAmount',
+      'fermentationMode',
+      'targetBakeHour',
+      'targetBakeMinute',
+      'coldFermentDays',
+    ]) {
+      await prefs.remove('${key}_$suffix');
+    }
+    if (!mounted) return;
+
+    final config = _pizzaType.config;
+    setState(() {
+      _hydrationPercent = config.defaultHydration;
+      _doughballs = config.defaultDoughballs;
+      _gramsPerBall = config.defaultGramsPerBall;
+      _yeastType = 1;
+      _poolishAmount = 300.0;
+      _fermentationMode = config.defaultFermentationMode;
+      _targetBakeHour = 19;
+      _targetBakeMinute = 0;
+      _coldFermentDays = config.defaultColdFermentDays;
+    });
+  }
+
+  Future<void> _toggleWakelock() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
+
+      if (!(prefs.getBool('hasSeenWakelockExplanation') ?? false)) {
+        await showDialog<void>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Keep screen on'),
+            content: const Text(
+              'Stops the screen sleeping while you make pizza. Useful when '
+              'your hands are covered in flour.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Got it'),
+              ),
+            ],
+          ),
+        );
+        if (!mounted) return;
+        await prefs.setBool('hasSeenWakelockExplanation', true);
+      }
+
+      setState(() => _isScreenAwake = !_isScreenAwake);
+      await WakelockPlus.toggle(enable: _isScreenAwake);
+      await prefs.setBool('isScreenAwake', _isScreenAwake);
+      Haptics.select();
+    } catch (e) {
+      debugPrint('Error handling wakelock toggle: $e');
+    }
+  }
+
+  // ── Pickers and modals ────────────────────────────────────────
+
+  /// No haptic here, the card that opens this already fires one.
+  Future<void> _showBakeTimePicker() async {
+    await TimeWheelPicker.show(
+      context: context,
+      initialTime: TimeOfDay(hour: _targetBakeHour, minute: _targetBakeMinute),
+      onChanged: _applyBakeTime,
     );
   }
 
+  void _applyBakeTime(TimeOfDay picked) {
+    setState(() {
+      _targetBakeHour = picked.hour;
+      _targetBakeMinute = picked.minute;
+      // Mid-bake this re-plans only what is left: the start and everything
+      // already ticked off keep their real times.
+      final session = _session;
+      if (session != null) {
+        final day = session.targetBake;
+        _session = session.copyWith(
+          targetBake: DateTime(
+            day.year,
+            day.month,
+            day.day,
+            picked.hour,
+            picked.minute,
+          ),
+        );
+      }
+    });
+    // Fire-and-forget, matching every other input handler here: the UI is
+    // already correct and the write must not block the sheet closing.
+    _saveSettings();
+    if (_isBaking) {
+      _persistSession();
+      _syncAlarms();
+    }
+  }
+
   void _showColdFermentDaysPicker() {
-    final days = List.generate(5, (index) => index + 1);
     ValuePicker.show<int>(
       context: context,
-      items: days,
+      title: 'Days in fridge',
+      items: List.generate(5, (index) => index + 1),
       initialValue: _coldFermentDays,
       onChanged: _updateColdFermentDays,
       displayBuilder: (value) => '$value ${value == 1 ? 'day' : 'days'}',
     );
   }
 
-  void _updatePizzaType(PizzaType pizzaType) {
-    setState(() {
-      _pizzaType = pizzaType;
-    });
-    // Load saved settings for the new pizza type
-    _loadSavedSettings();
-    HapticFeedback.selectionClick();
-  }
-
-  void _showPizzaTypeSelector() {
-    showCupertinoModalPopup<void>(
-      context: context,
-      builder: (BuildContext context) => CupertinoActionSheet(
-        title: const Text(
-          'Select Pizza Type',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-        ),
-        actions: PizzaType.values.map((pizzaType) {
-          return CupertinoActionSheetAction(
-            onPressed: () {
-              HapticFeedback.selectionClick();
-              Navigator.pop(context);
-              _updatePizzaType(pizzaType);
-            },
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  pizzaType.config.displayName,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                if (_pizzaType == pizzaType)
-                  const Icon(
-                    CupertinoIcons.checkmark,
-                    color: CupertinoColors.systemBlue,
-                    size: 20,
-                  ),
-              ],
-            ),
-          );
-        }).toList(),
-        cancelButton: CupertinoActionSheetAction(
-          isDefaultAction: true,
-          onPressed: () {
-            HapticFeedback.selectionClick();
-            Navigator.pop(context);
-          },
-          child: const Text('Cancel'),
-        ),
-      ),
-    );
-  }
-
-  void _showPoolishCalculator() async {
-    final result = await PoolishCalculator.show(
-      context: context,
-      initialAmount: _poolishAmount,
-    );
-    if (result != null) {
-      setState(() {
-        _poolishAmount = result;
-      });
-      _saveSettings();
-    }
-  }
-
-  void _showHawaiianPizzaToast() {
-    showCupertinoDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => PopScope(
-        canPop: false,
-        child: CupertinoAlertDialog(
-          content: const Text(
-            '🍕🍍 Hawaiian pizza da best',
-            style: TextStyle(fontSize: 16),
-          ),
-          actions: [
-            CupertinoDialogAction(
-              onPressed: () {
-                HapticFeedback.selectionClick();
-                Navigator.pop(context);
-              },
-              child: const Text('I agree!'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // Picker methods using reusable ValuePicker component
   void _showDoughballsPicker() {
-    final values = List.generate(50, (index) => index + 1);
     ValuePicker.show<int>(
       context: context,
-      items: values,
+      title: 'Doughballs',
+      items: List.generate(50, (index) => index + 1),
       initialValue: _doughballs,
       onChanged: _updateDoughballs,
-      displayBuilder: (value) => value.toString(),
+      displayBuilder: (value) => '$value',
     );
   }
 
   void _showWeightPicker() {
-    final weights = List.generate(86, (index) => 150.0 + (index * 10));
     ValuePicker.show<double>(
       context: context,
-      items: weights,
+      title: 'Grams per ball',
+      items: List.generate(86, (index) => 150.0 + (index * 10)),
       initialValue: _gramsPerBall,
       onChanged: _updateWeight,
       displayBuilder: (value) => '${value.round()}g',
@@ -1133,13 +812,60 @@ class _PizzaCalculatorScreenState extends State<PizzaCalculatorScreen> {
   }
 
   void _showHydrationPicker() {
-    final percentages = List.generate(26, (index) => 55.0 + index);
     ValuePicker.show<double>(
       context: context,
-      items: percentages,
+      title: 'Hydration',
+      items: List.generate(26, (index) => 55.0 + index),
       initialValue: _hydrationPercent,
       onChanged: _updateHydration,
       displayBuilder: (value) => '${value.round()}%',
+    );
+  }
+
+  void _showPizzaTypeSelector() {
+    Haptics.select();
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final pizzaType in PizzaType.values)
+              ListTile(
+                title: Text(pizzaType.config.displayName),
+                subtitle: Text(pizzaType.config.flourType),
+                trailing: _pizzaType == pizzaType
+                    ? Icon(
+                        Icons.check,
+                        color: Theme.of(context).colorScheme.primary,
+                      )
+                    : null,
+                onTap: () {
+                  Navigator.pop(context);
+                  _updatePizzaType(pizzaType);
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// No haptic here, the row that opens this already fires one.
+  Future<void> _showPoolishCalculator() async {
+    final result = await PoolishCalculator.show(
+      context: context,
+      initialAmount: _poolishAmount,
+    );
+    if (result == null || !mounted) return;
+    setState(() => _poolishAmount = result);
+    await _saveSettings();
+  }
+
+  void _showHawaiianPizzaToast() {
+    Haptics.tick();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('🍕🍍 Hawaiian pizza da best')),
     );
   }
 }

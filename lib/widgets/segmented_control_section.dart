@@ -1,63 +1,58 @@
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/services.dart';
+/// A labelled `SegmentedButton`.
+///
+/// Replaces `CupertinoSegmentedControl`, which was the iOS 12-era control and
+/// had been left behind twice over, once by iOS, once by the move to Material.
 
-/// Reusable segmented control section component
+library;
+
+import 'package:flutter/material.dart';
+
+import '../styles/app_theme.dart';
+import '../utils/haptics.dart';
+import 'app_scaffolding.dart';
+
 class SegmentedControlSection<T extends Object> extends StatelessWidget {
   final String title;
   final T groupValue;
-  final Map<T, Widget> children;
+
+  /// Value to label, in display order.
+  final Map<T, String> options;
   final ValueChanged<T?> onValueChanged;
 
   const SegmentedControlSection({
     super.key,
     required this.title,
     required this.groupValue,
-    required this.children,
+    required this.options,
     required this.onValueChanged,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1C1C1C),
-        borderRadius: BorderRadius.circular(12),
-      ),
+    return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            title,
-            style: const TextStyle(
-              color: CupertinoColors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 16),
-          Container(
+          Text(title, style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: AppSpacing.md),
+          SizedBox(
             width: double.infinity,
-            decoration: BoxDecoration(
-              color: const Color(0xFF2C2C2E),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: CupertinoSegmentedControl<T>(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 2,
-                vertical: 2,
-              ),
-              children: children,
-              onValueChanged: (T? value) {
-                HapticFeedback.selectionClick();
-                onValueChanged(value);
+            child: SegmentedButton<T>(
+              // The tick takes space that the labels need on a narrow screen,
+              // and the filled segment already shows what is selected.
+              showSelectedIcon: false,
+              segments: [
+                for (final entry in options.entries)
+                  ButtonSegment<T>(
+                    value: entry.key,
+                    label: Text(entry.value),
+                  ),
+              ],
+              selected: {groupValue},
+              onSelectionChanged: (selection) {
+                Haptics.select();
+                onValueChanged(selection.firstOrNull);
               },
-              groupValue: groupValue,
-              selectedColor: const Color(0x44FFFFFF),
-              unselectedColor: const Color(0x00000000),
-              borderColor: const Color(0x00000000),
-              pressedColor: const Color(0x66FFFFFF),
             ),
           ),
         ],

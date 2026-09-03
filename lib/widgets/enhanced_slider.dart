@@ -1,7 +1,17 @@
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/services.dart';
+/// A labelled Material `Slider` with a value readout and range markers.
+///
+/// The slider itself is now stock M3. The previous version hand-drew the
+/// track. What is kept is the marker row underneath, because knowing where 65%
+/// sits on the scale is genuinely useful when picking a hydration.
 
-/// Enhanced slider with visual markers and tap-to-pick functionality
+library;
+
+import 'package:flutter/material.dart';
+
+import '../styles/app_theme.dart';
+import '../utils/haptics.dart';
+import 'app_scaffolding.dart';
+
 class EnhancedSlider extends StatelessWidget {
   final String title;
   final double value;
@@ -10,6 +20,8 @@ class EnhancedSlider extends StatelessWidget {
   final double max;
   final int divisions;
   final ValueChanged<double> onChanged;
+
+  /// Tapping the readout opens the wheel, for when dragging is too fiddly.
   final VoidCallback onTap;
   final List<String> markers;
 
@@ -28,89 +40,68 @@ class EnhancedSlider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF1C1C1C),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF2C2C2E), width: 0.5),
-      ),
+    final theme = Theme.of(context);
+
+    return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20.0, 20.0, 20.0, 8.0),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w500,
-                    color: CupertinoColors.white,
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(title, style: theme.textTheme.titleMedium),
+              InkWell(
+                onTap: () {
+                  Haptics.select();
+                  onTap();
+                },
+                borderRadius: BorderRadius.circular(AppRadius.small),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.sm,
+                    vertical: AppSpacing.xs,
                   ),
-                ),
-                Text(
-                  displayValue,
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w600,
-                    color: CupertinoColors.systemBlue,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20.0, 8.0, 20.0, 12.0),
-            child: Column(
-              children: [
-                GestureDetector(
-                  onTap: () {
-                    HapticFeedback.selectionClick();
-                    onTap();
-                  },
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: CupertinoSlider(
-                      value: value,
-                      min: min,
-                      max: max,
-                      divisions: divisions,
-                      activeColor: CupertinoColors.systemBlue,
-                      thumbColor: CupertinoColors.systemBlue,
-                      onChanged: onChanged,
+                  child: Text(
+                    displayValue,
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      color: theme.colorScheme.primary,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
-                 Padding(
-                   padding: const EdgeInsets.symmetric(horizontal: 4.0),
-                   child: Row(
-                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                     children: markers.map((marker) {
-                       String cleanMarker = marker
-                           .replaceAll('%', '')
-                           .replaceAll('x', '')
-                           .trim();
-                       final markerValue = double.parse(cleanMarker);
-                       final isActive = (value - markerValue).abs() <= (value >= 10 ? 5 : 0.5);
-                       return Text(
-                         marker,
-                         style: TextStyle(
-                           fontSize: 12,
-                           fontWeight: FontWeight.w500,
-                           color: isActive
-                               ? CupertinoColors.systemBlue
-                               : const Color(0xFF8E8E93),
-                         ),
-                       );
-                     }).toList(),
-                   ),
-                 ),
+              ),
+            ],
+          ),
+          Slider(
+            value: value,
+            min: min,
+            max: max,
+            divisions: divisions,
+            label: displayValue,
+            // The most tactile control in the app had no feedback at all: you
+            // could drag hydration across 25 divisions in silence. `divisions`
+            // makes the slider snap, so comparing against the current value is
+            // enough to fire once per notch rather than once per pixel.
+            onChanged: (next) {
+              if (next.round() != value.round()) Haptics.tick();
+              onChanged(next);
+            },
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                for (final marker in markers)
+                  Text(
+                    marker,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
               ],
             ),
           ),
-          const SizedBox(height: 8),
         ],
       ),
     );
